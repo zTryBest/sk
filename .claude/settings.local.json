@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:open.hikvision.com)",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_run_code_unsafe",
+      "mcp__playwright__browser_network_requests",
+      "Bash(del:*)",
+      "Bash(__NEW_LINE_57ec9152fd5e90c4__ echo \"\")",
+      "Bash(powershell:*)",
+      "Bash(Get-ChildItem -Recurse -Depth 2 \"D:\\\\github\\\\my-skill\")",
+      "Bash(Where-Object:*)",
+      "Bash(Select-Object:*)",
+      "Bash(dir:*)"
+    ]
+  }
+}
