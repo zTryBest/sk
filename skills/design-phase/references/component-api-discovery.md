@@ -67,8 +67,8 @@ After extracting component and API information:
 3. **Confirmed items are added to the knowledge base immediately.**
 
 Knowledge base accumulation:
-- Components → `~/.hermes/knowledge/<platform>/microservices.md`
-- APIs → `~/.hermes/knowledge/<platform>/interfaces.md`
+- Components → `~/.claude/knowledge/<platform>/microservices.md`
+- APIs → `~/.claude/knowledge/<platform>/interfaces.md`
 
 This ensures the next requirement analysis can query the KB directly
 without repeating the Playwright crawl.
