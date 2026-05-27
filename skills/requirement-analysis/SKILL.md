@@ -28,6 +28,28 @@ This skill DOES:
 - Surface ambiguities for human confirmation
 - Output a requirements document
 
+## Configuration
+
+Before starting, load internal URLs from the config file:
+
+```
+%USERPROFILE%\.claude\config\internal-urls.yaml
+```
+
+> WSL 用户：`/mnt/c/Users/<username>/.claude/config/internal-urls.yaml` 或 `\\wsl$\<distro>\home\<user>\.claude\config\internal-urls.yaml`
+
+The config maps platform names to internal system URLs:
+
+```yaml
+<platform>:
+  ticket_system: "https://..."   # 需求 ticket 系统
+  components: "https://..."       # 组件信息（微服务清单）
+  apis: "https://..."             # 接口信息（API 契约）
+```
+
+- If the platform's `ticket_system` URL is configured → use it as the ticket URL
+- If empty or not found → ask the user for the ticket URL
+
 ## Input
 
 ### Mode A: Ticket URL (preferred)
@@ -104,3 +126,14 @@ Write to `~/.claude/outputs/requirements/<platform>/<feature-name>.md`.
 - Batch confirmations — 3-4 at a time, not one by one.
 - Preserve original requirement text in the document.
 - Break down, don't summarize — "build user management" → F-01 through F-08.
+
+## What's Next
+
+After requirements are confirmed:
+
+```
+需求文档 → Pencil Round 1 (低保真确认稿) → 业务方确认 → 方案设计
+```
+
+- **Pencil Round 1** — generate low-fidelity mockups from functional items for business
+  confirmation before investing in detailed design. Use the `pencil` skill.

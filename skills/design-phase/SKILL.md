@@ -39,6 +39,28 @@ Project-specific (定制) interfaces stay in the design document only.
 **Goes into KB:** baseline microservice inventory, baseline Feign/MQ/REST interfaces.
 **Does NOT go into KB:** new custom microservice interfaces, project-specific REST APIs.
 
+## Configuration
+
+Before starting, load internal URLs from the config file:
+
+```
+%USERPROFILE%\.claude\config\internal-urls.yaml
+```
+
+> WSL 用户：`/mnt/c/Users/<username>/.claude/config/internal-urls.yaml`
+
+The config maps platform names to internal system URLs:
+
+```yaml
+<platform>:
+  ticket_system: "https://..."   # 需求 ticket 系统
+  components: "https://..."       # 组件信息（微服务清单）
+  apis: "https://..."             # 接口信息（API 契约）
+```
+
+- If the platform's `components` / `apis` URLs are configured → use them in Phase 3
+- If empty or not found → ask the user to provide the URLs
+
 ## Workflow
 
 ### Phase 1: Load Context
@@ -173,3 +195,17 @@ Output to: `~/.claude/outputs/design/<platform>/<feature-name>-设计文档.md`
 - KB only for baseline interfaces, not project-specific ones.
 - Every Feign interface must define a Fallback.
 - **Never guess or fabricate API information.** If an API cannot be found or is uncertain, stop and ask the user. Do not invent interfaces, parameters, or response formats.
+
+## What's Next
+
+After design is complete:
+
+```
+方案设计 → Pencil Round 2 (高保真设计稿)
+      ↓
+    开发 (后端编码)
+```
+
+- **Pencil Round 2** — generate high-fidelity .pen designs + PNG exports from Phase 4
+  frontend page specs (static initial state, component inventory, interaction flow,
+  API dependencies). Use the `pencil` skill, Round 2 mode.

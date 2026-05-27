@@ -22,8 +22,8 @@ if (!loginUrl) {
   process.exit(1);
 }
 
-const hermesHome = process.env.HERMES_HOME || path.join(os.homedir(), ".hermes");
-const profileDir = path.join(hermesHome, "browser-profile");
+const claudeHome = process.env.CLAUDE_CODE_HOME || path.join(os.homedir(), ".claude");
+const profileDir = path.join(claudeHome, "browser-profile");
 const storageStateFile = path.join(profileDir, "auth.json");
 
 fs.mkdirSync(profileDir, { recursive: true });
