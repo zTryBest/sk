@@ -41,7 +41,7 @@ Project-specific (定制) interfaces stay in the design document only.
 
 ## Configuration
 
-Before starting, load internal URLs from the config file:
+Before starting, load the three global internal system URLs:
 
 ```
 %USERPROFILE%\.claude\config\internal-urls.yaml
@@ -49,17 +49,17 @@ Before starting, load internal URLs from the config file:
 
 > WSL 用户：`/mnt/c/Users/<username>/.claude/config/internal-urls.yaml`
 
-The config maps platform names to internal system URLs:
+These three addresses are **fixed and shared by all platforms**:
 
 ```yaml
-<platform>:
-  ticket_system: "https://..."   # 需求 ticket 系统
-  components: "https://..."       # 组件信息（微服务清单）
-  apis: "https://..."             # 接口信息（API 契约）
+sso_login: "https://..."           # SSO 统一认证登录地址
+product_composition: "https://..."  # 产品构成查询地址
+component_api: "https://..."        # 组件接口查询地址
 ```
 
-- If the platform's `components` / `apis` URLs are configured → use them in Phase 3
-- If empty or not found → ask the user to provide the URLs
+- `product_composition` — 在 Phase 3 中用于查询平台微服务清单（"产品构成"模块）
+- `component_api` — 在 Phase 3 中用于查询各微服务的 API 契约
+- 如果 URL 为空 → 跳过在线查询，使用已有 KB + 人工补充
 
 ## Workflow
 
@@ -97,14 +97,18 @@ Use AskUserQuestion to confirm all three architecture views.
 
 Follow the discovery workflow in `references/component-api-discovery.md`.
 
-Before starting, ask for internal URLs:
-- Components URL (for discovering platform microservices)
-- API docs URL (for discovering inter-service APIs)
+**在线查询（URL 已配置时）：**
 
-If provided, use Playwright MCP to crawl per the reference doc.
-If not, fall back to `~/.claude/knowledge/<platform>/` KB + manual input.
+Component Discovery (see reference for detailed MCP steps):
+1. Navigate to `product_composition` URL → search for the platform → click result card.
+2. Locate the **"产品构成"** module → extract all microservices.
 
-If not, fall back to `~/.claude/knowledge/<platform>/` KB + manual input.
+API Discovery (see reference for detailed MCP steps):
+1. Navigate to `component_api` URL → search for each component by name.
+2. Hover → click "查看详情" → select version (latest ≤ target).
+
+**离线模式（URL 未配置时）：**
+Fall back to `~/.claude/knowledge/<platform>/` KB + manual input.
 
 If crawled docs are unclear (missing examples, ambiguous types):
 1. Ask: "是否有准确的请求/响应示例？" → use as authoritative source.

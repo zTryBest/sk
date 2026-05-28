@@ -1,14 +1,17 @@
 # Platform Component & API Discovery
 
-> Internal tool URLs — exact addresses provided by user per platform.
+> Internal system URLs are loaded from `%USERPROFILE%\.claude\config\internal-urls.yaml`.
+> Three global addresses shared by all platforms:
+> - `product_composition` — 产品构成查询地址
+> - `component_api` — 组件接口查询地址
 > All interactions via Playwright MCP with saved SSO session.
 
 ## Component Discovery
 
-URL: `<COMPONENTS_URL>` (user-provided)
+URL: `product_composition` (from config)
 
 Steps:
-1. Navigate to the internal components URL via Playwright MCP.
+1. Navigate to the `product_composition` URL via Playwright MCP.
 2. In the search bar, enter the platform name (e.g. "PVIC").
 3. Search results appear as cards — each card is one product.
 4. Click the card matching the target platform to enter the product detail page.
@@ -19,10 +22,10 @@ Steps:
 
 ## API (Interface) Discovery
 
-URL: `<APIS_URL>` (user-provided)
+URL: `component_api` (from config)
 
 Steps:
-1. Navigate to the internal API docs URL via Playwright MCP.
+1. Navigate to the `component_api` URL via Playwright MCP.
 2. In the search bar, enter the component name (e.g. "用户服务").
 3. Search results include **component tags** — clickable labels.
 4. **Hover** the mouse over a component tag to reveal a **"查看详情" (View Details)** button.
@@ -39,7 +42,7 @@ Steps:
 
 ```
 # Component discovery flow
-browser_navigate("<COMPONENTS_URL>")
+browser_navigate("<product_composition>")
 browser_type(selector="search-input", text="PVIC")
 browser_click(selector="search-button")
 browser_snapshot()                          # Get result cards
@@ -48,7 +51,7 @@ browser_snapshot()                          # Get product detail
 # Locate "产品构成" section → extract component list
 
 # API discovery flow
-browser_navigate("<APIS_URL>")
+browser_navigate("<component_api>")
 browser_type(selector="search-input", text="用户服务")
 browser_click(selector="search-button")
 browser_snapshot()                          # Get component tags

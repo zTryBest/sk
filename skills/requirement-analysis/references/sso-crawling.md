@@ -1,9 +1,15 @@
-# SSO-Protected Requirement Ticket Crawling
+# SSO-Protected Internal System Access
 
 ## Problem
 
-Company-internal requirement systems (Jira, TAPD, 禅道, 飞书, custom) are behind
-SSO authentication. Simple HTTP fetch cannot access them.
+All company-internal systems are behind SSO authentication. Simple HTTP fetch
+cannot access them. This includes:
+
+- **需求 ticket 系统** — ticket URL 由用户每次提供（不在配置文件中）
+- **产品构成查询系统** — `product_composition` URL（配置文件中的全局地址）
+- **组件接口查询系统** — `component_api` URL（配置文件中的全局地址）
+
+Any access to these systems requires SSO authentication first.
 
 ## Solution: Playwright MCP
 
@@ -33,24 +39,29 @@ Key options:
 ### First-Time SSO Login
 
 1. Add the MCP server config
-2. Navigate to the internal ticket URL via Playwright MCP tools
-3. A visible browser window opens, redirects to SSO
-4. **Complete SSO login manually** (credentials, MFA if needed)
-5. Browser session is saved to `--user-data-dir`
-6. Future uses: browser reuses saved session, SSO is transparent
+2. Navigate to any internal URL (ticket, product_composition, or component_api) via Playwright MCP
+3. The browser auto-redirects to the SSO login page (`sso_login` from config)
+4. A visible browser window opens
+5. **Complete SSO login manually** (credentials, MFA if needed)
+6. Browser session is saved to `--user-data-dir`
+7. Future uses: navigating to ANY internal URL reuses saved session, SSO is transparent
 
-### Crawling Flow
+### Crawling Flow (General Pattern)
 
-Once SSO session is established:
+Once SSO session is established, the same pattern works for any internal system:
 
 ```
-Playwright: browser_navigate(url="<TICKET_URL>")
-  → SSO auto-redirect, cookies reused, no login needed
-  → Page loads
+# Ticket crawling (URL provided by user each time)
+Playwright: browser_navigate(url="<USER-PROVIDED-TICKET-URL>")
+  → SSO auto-redirect if needed, cookies reused
 
-Playwright: browser_snapshot()
-  → Returns page content as accessibility tree
-  → Parse to extract: platform version, requirement title, description, comments
+# Product composition (global URL from config)
+Playwright: browser_navigate(url="<product_composition>")
+  → Search platform name → click result → view "产品构成"
+
+# Component API (global URL from config)
+Playwright: browser_navigate(url="<component_api>")
+  → Search component name → hover tag → click "查看详情"
 ```
 
 ### Fallback: Standalone Playwright Script
@@ -75,11 +86,13 @@ const url = process.argv[2];
 })();
 ```
 
-### Alternative: crawl4ai
+### Cascading Strategy: web_fetch → Playwright
 
-`crawl4ai` excels at extracting clean Markdown from web pages but does NOT
-handle SSO login. Use it as a post-processing step after Playwright MCP has
-navigated and authenticated, or for public pages.
+If the page is publicly accessible, `web_fetch` will return clean content directly.
+If it fails (SSO redirect, 403, etc.), Playwright MCP is the automatic fallback.
+
+**Do not skip web_fetch.** Always try the lightweight approach first.
+Playwright is the escalation path, not the default.
 
 ### Pitfalls
 

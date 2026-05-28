@@ -30,38 +30,63 @@ This skill DOES:
 
 ## Configuration
 
-Before starting, load internal URLs from the config file:
+Before starting, load the three global internal system URLs:
 
 ```
 %USERPROFILE%\.claude\config\internal-urls.yaml
 ```
 
-> WSL 用户：`/mnt/c/Users/<username>/.claude/config/internal-urls.yaml` 或 `\\wsl$\<distro>\home\<user>\.claude\config\internal-urls.yaml`
+> WSL 用户：`/mnt/c/Users/<username>/.claude/config/internal-urls.yaml`
 
-The config maps platform names to internal system URLs:
+These three addresses are **fixed and shared by all platforms**:
 
 ```yaml
-<platform>:
-  ticket_system: "https://..."   # 需求 ticket 系统
-  components: "https://..."       # 组件信息（微服务清单）
-  apis: "https://..."             # 接口信息（API 契约）
+sso_login: "https://..."           # SSO 统一认证登录地址
+product_composition: "https://..."  # 产品构成查询地址
+component_api: "https://..."        # 组件接口查询地址
 ```
 
-- If the platform's `ticket_system` URL is configured → use it as the ticket URL
-- If empty or not found → ask the user for the ticket URL
+- `sso_login` — 所有内部系统的认证入口。访问需登录的页面时自动跳转到此地址
+- `product_composition` — 查询平台微服务清单（设计阶段使用）
+- `component_api` — 查询微服务 API 契约（设计阶段使用）
+
+**Ticket URL 不是配置文件中的固定地址。** 需求 ticket URL 由用户在每次需求分析时主动提供（Mode A）。如果用户没有提供 ticket URL，说明走手动输入模式（Mode B）。
 
 ## Input
 
-### Mode A: Ticket URL (preferred)
+当用户提供了 ticket URL，说明走需求单拉取模式。**必须使用级联策略**，不要预先判断 URL 是"内部"还是"公开"：
 
-For internal ticket systems (Jira, TAPD, 禅道, 飞书, 自研系统):
+### Mode A: Ticket URL — 级联抓取策略
 
-1. Use web_fetch or Playwright MCP to retrieve page content.
-2. Parse to extract:
-   - **Platform + version** — MANDATORY. Stop and ask if not found.
-   - Requirement title and full description
-   - Attachments (note existence for images)
-3. If behind SSO, use Playwright MCP with persistent browser profile for login.
+**核心原则：先试简单方式，失败自动升级。不要跳过第一步直接上 Playwright。**
+
+#### Step 1: 轻量抓取（先试）
+
+始终先尝试最轻量的方式获取页面内容：
+
+1. **web_fetch**（首选）— 尝试直接抓取页面内容
+2. **crawl4ai**（备选）— 如果可用，提取 Markdown
+3. **判断结果**：
+   - ✅ 成功 → 跳到 Step 3 提取信息
+   - ❌ 失败（SSO 重定向、登录页、403、超时、空内容）→ **自动进入 Step 2，不要问用户**
+
+#### Step 2: Playwright MCP（自动降级）
+
+**触发条件**：Step 1 无法获取到有效内容。
+
+大多数内部系统都有 SSO，轻量抓取失败是预期的。不需要问用户"要不要用 Playwright"，直接执行。
+
+使用 Playwright MCP（需预先配置 `claude mcp add playwright`）：
+1. `browser_navigate` 打开用户提供的 ticket URL
+2. 未登录时自动跳转到 `sso_login` 认证
+3. `browser_snapshot` 或 `browser_evaluate` 提取页面内容
+
+#### Step 3: 提取信息
+
+统一提取：
+- **Platform + version** — MANDATORY. Stop and ask if not found.
+- Requirement title and full description
+- Attachments (note existence for images)
 
 ### Mode B: Manual Input
 
