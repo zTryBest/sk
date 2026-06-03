@@ -1,0 +1,117 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Import Test Center",
+    "version": "v1.2"
+  },
+  "paths": {
+    "/api/import-test/users/{userId}": {
+      "get": {
+        "summary": "Get import test user detail",
+        "description": "Returns user name, status, and department for customization pages.",
+        "tags": ["user", "profile"],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "description": "User ID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDetail"
+                },
+                "example": {
+                  "id": "u001",
+                  "name": "Alice",
+                  "status": "ACTIVE",
+                  "departmentName": "Sales"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/import-test/departments/{departmentId}": {
+      "get": {
+        "summary": "Get import test department detail",
+        "description": "Returns department name and manager information.",
+        "tags": ["department", "organization"],
+        "parameters": [
+          {
+            "name": "departmentId",
+            "in": "path",
+            "required": true,
+            "description": "Department ID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Department detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentDetail"
+                },
+                "example": {
+                  "id": "d001",
+                  "name": "Sales",
+                  "managerName": "Bob"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "UserDetail": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "departmentName": {
+            "type": "string"
+          }
+        }
+      },
+      "DepartmentDetail": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "managerName": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

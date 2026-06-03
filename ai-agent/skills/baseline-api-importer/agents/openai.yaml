@@ -1,0 +1,4 @@
+interface:
+  display_name: "基线接口导入"
+  short_description: "将 Swagger 接口文档导入方案设计知识库。"
+  default_prompt: "导入已下载的组件 swagger.json 文档，补充接口语义信息，重建向量索引，并验证 MCP 查询结果。"

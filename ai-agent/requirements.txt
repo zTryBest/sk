@@ -1,0 +1,7 @@
+fastmcp
+openai
+python-dotenv
+pydantic
+psycopg2-binary
+faiss-cpu
+numpy
