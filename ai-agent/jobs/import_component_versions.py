@@ -52,6 +52,7 @@ def import_component_versions(
         product_description: str = "",
         component_version: str = "",
         enrichment_file: str | None = None,
+        enrichment_files: dict[str, str] | None = None,
         path_prefix: str | None = None,
         allow_unbound: bool = False,
         rebuild_index: bool = False
@@ -67,6 +68,7 @@ def import_component_versions(
     ordered_doc_versions = sort_versions(
         list(version_file_map.keys())
     )
+    enrichment_files = enrichment_files or {}
     summaries = []
 
     for doc_version in ordered_doc_versions:
@@ -93,7 +95,10 @@ def import_component_versions(
             product_name=product_name,
             product_description=product_description,
             component_version=component_version,
-            enrichment_file=enrichment_file,
+            enrichment_file=enrichment_files.get(
+                doc_version,
+                enrichment_file
+            ),
             path_prefix=path_prefix,
             allow_unbound=allow_unbound,
             rebuild_index=False
@@ -101,6 +106,10 @@ def import_component_versions(
         summaries.append({
             "doc_version": doc_version,
             "swagger_file": version_file_map[doc_version],
+            "enrichment_file": enrichment_files.get(
+                doc_version,
+                enrichment_file
+            ),
             "stats": stats
         })
 
@@ -156,6 +165,16 @@ def main():
     parser.add_argument("--component-version", default="")
     parser.add_argument("--enrichment-file", default=None)
     parser.add_argument(
+        "--enrichment-version",
+        action="append",
+        default=[],
+        type=parse_version_file,
+        help=(
+            "Repeatable DOC_VERSION=ENRICHMENT_FILE pair. "
+            "When provided, it overrides --enrichment-file for that doc version."
+        )
+    )
+    parser.add_argument(
         "--allow-unbound",
         action="store_true",
         help=(
@@ -187,6 +206,7 @@ def main():
         product_description=args.product_description,
         component_version=args.component_version,
         enrichment_file=args.enrichment_file,
+        enrichment_files=dict(args.enrichment_version),
         path_prefix=args.path_prefix,
         allow_unbound=args.allow_unbound,
         rebuild_index=args.rebuild_index

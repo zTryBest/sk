@@ -3,12 +3,22 @@
 import argparse
 import json
 import sys
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from service.knowledge_service import KnowledgeService  # noqa: E402
+
+
+def _json_default(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return str(value)
 
 
 def _identity_summary(identity, score_map, terms, service):
@@ -131,6 +141,7 @@ def main():
                 payload,
                 ensure_ascii=False,
                 indent=2,
+                default=_json_default,
             )
         )
         return

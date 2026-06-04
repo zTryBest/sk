@@ -1,111 +1,255 @@
 ---
 name: baseline-api-importer
-description: 将组件的 Swagger/OpenAPI JSON 文档导入当前项目的方案设计阶段 API 知识库。当用户已经下载一个或多个组件接口文档版本的 swagger.json/openapi.json，并希望 AI 解析接口、补充能力标签和业务场景、写入 api_identity/api_contract/api_lifecycle、重建 FAISS 向量索引、验证 MCP 查询结果时使用。
+description: 当用户要把一个或多个组件段的 Swagger/OpenAPI JSON 导入 ai-agent 项目的方案设计 API 知识库时必须使用本 skill。适用于清理旧数据、生成 enrichment 模板、让 AI 补充中文业务语义、批量导入多个接口文档版本、重建 FAISS 向量索引、验证 MCP 查询效果的完整流程。
 ---
 
-# 基线组件接口导入
+# 基线组件 API 知识导入
 
-这个 skill 用于把下载好的组件接口文档转成 MCP 可检索的方案设计知识。优先使用仓库里的确定性脚本，不要手写 SQL 入库。
+本 skill 用于把组件接口文档导入 ai-agent 的 design-phase 知识库，供 MCP 在方案设计阶段根据需求项检索接口。
 
-## 工作流
+原则：优先运行项目内脚本，不要手写 SQL 入库。
 
-1. 确认组件信息：
-   - 必填：`product_id`、`product_version`、实际 `component_version`。这些用于维护 `product_component_baseline`，否则 MCP 的需求检索没有组件范围。
-   - 必填：`component_id`，以及一个或多个 `doc_version=swagger_file`。
-   - 如果组件下有多个段，必填 `segment_id`，例如 `aaa-web`、`aaa-search`。
-   - 建议填写：`component_name`、组件描述、组件适用场景。
-   - 建议填写：`segment_name`、组件段描述、组件段适用场景。
-   - 所有 `product_id`、`component_id`、`segment_id` 统一按大写理解；用户输入小写也会被导入脚本规范化为大写。
-   - 只有做纯实验性组件导入时才允许不绑定平台，此时必须显式使用 `--allow-unbound`。
+## 数据分层
 
-2. 快速检查 Swagger/OpenAPI 文件：
-   - 判断是 Swagger 2.0 还是 OpenAPI 3.x。
-   - Swagger 2.0 的 `basePath` 会自动拼接到接口路径前，例如 `/xres-search/service/rs` + `/resource/query` 会入库为 `/xres-search/service/rs/resource/query`。
-   - OpenAPI 3.x 的 `servers[0].url` 如果包含路径，也会作为接口路径前缀。
-   - 如需覆盖自动识别的路径前缀，使用 `--path-prefix`；如需禁用前缀，传空字符串。
-   - 检查 `summary`、`tags`、`description` 是否足够支撑语义检索。
-   - 如果接口元信息较弱，先生成 enrichment 模板：
+必须把两类数据分开处理：
+
+1. 组件 API 知识：某个组件/组件段的多个 Swagger/OpenAPI 文档版本，例如 `XRES` 的 `1.7.0`、`2.4.0`。这一步只导入接口身份、接口契约、接口生命周期和向量索引，不绑定具体平台。
+2. 平台基线：某个平台版本包含哪些组件，以及每个组件的实际版本，例如 `PPP 2.5.0` 的基线组件 `XRES=2.4.0`。这一步写入 `product_release` 和 `product_component_baseline`。
+
+推荐流程：
+
+- 先批量导入组件 API 多版本知识。
+- 再批量录入平台版本的基线组件清单。
+- MCP 查询时根据 `product_id + product_version` 找到组件版本，再解析到最接近的接口文档版本和契约。
+
+## 必须先确认的信息
+
+开始前必须确认：
+
+- `product_id`：平台 ID，例如 `PLATFORM_X`
+- `product_version`：平台版本，例如 `5.0`
+- `component_id`：组件 ID，例如 `AAA`
+- `segment_id`：组件段 ID，例如 `AAA_SEARCH`
+- Swagger/OpenAPI JSON 文件目录
+- 是否需要清理旧数据
+
+建议确认：
+
+- `product_name`
+- `component_name`
+- `segment_name`
+- 组件/组件段的业务描述
+
+约定：
+
+- `product_id`、`component_id`、`segment_id` 可由用户小写输入，但脚本会规范化为大写。
+- 同一组件跨版本必须保持同一个 `component_id`。
+- 同一组件下不同服务段用 `segment_id` 区分，服务段不是独立组件。
+- `doc_version` 表示接口文档版本，例如 `v1.0`、`v1.1`、`v2.1`。
+- `component_version` 只在绑定平台基线时需要，表示某个平台版本实际使用的组件版本。批量导入多个 Swagger 文档版本时不要强制要求它。
+
+## 推荐文件目录
+
+```text
+E:\AI\kb-import\
+  PLATFORM_X\5.0\
+    AAA\
+      AAA_SEARCH\
+        swagger\
+          v1.0.swagger.json
+          v1.1.swagger.json
+          v1.2.swagger.json
+        enrichment\
+          v1.0.enrichment.json
+          v1.1.enrichment.json
+          v1.2.enrichment.json
+```
+
+## enrichment 文件
+
+`enrichment-file` 是接口文档增强文件，用来补充 Swagger 中缺失的中文业务含义、字段含义、示例值含义和检索关键词。
+
+重点补充：
+
+- `api_name`
+- `description`
+- `business_terms`
+- `search_keywords`
+- `request_field_notes`
+- `response_field_notes`
+- `request_value_notes`
+- `response_value_notes`
+- `usage_notes`
+
+这些内容会进入知识库和向量索引。
+
+## 清理旧数据
+
+全量清理 design-phase 数据，先 dry-run：
+
+```powershell
+python jobs\cleanup_dirty_knowledge.py --all-design --delete-current-vector-files
+```
+
+确认后执行：
+
+```powershell
+python jobs\cleanup_dirty_knowledge.py --all-design --delete-current-vector-files --confirm
+```
+
+只清理某个组件段：
+
+```powershell
+python jobs\cleanup_dirty_knowledge.py `
+  --component-id AAA `
+  --segment-id AAA_SEARCH `
+  --include-baseline `
+  --include-component-metadata `
+  --delete-current-vector-files `
+  --confirm
+```
+
+## 生成 enrichment 模板
 
 ```powershell
 python jobs\import_swagger.py `
-  --component-id USER_CENTER `
-  --segment-id USER_CENTER_WEB `
-  --doc-version v1.2 `
-  --swagger-file D:\docs\user-center-v1.2.swagger.json `
-  --emit-enrichment-template D:\docs\user-center-v1.2.enrichment.json
+  --component-id AAA `
+  --segment-id AAA_SEARCH `
+  --doc-version v1.0 `
+  --swagger-file E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\swagger\v1.0.swagger.json `
+  --emit-enrichment-template E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\enrichment\v1.0.enrichment.json
 ```
 
-3. 如需补充接口能力标签、业务场景、请求示例、响应示例，读取 `references/enrichment-format.md`，按其中格式生成 enrichment JSON。
+每个 Swagger 版本生成一个 enrichment 模板。
 
-4. 导入单个文档版本：
+## AI 补充 enrichment
 
-```powershell
-python jobs\import_swagger.py `
-  --component-id USER_CENTER `
-  --segment-id USER_CENTER_WEB `
-  --segment-name "用户中心 Web 段" `
-  --doc-version v1.2 `
-  --swagger-file D:\docs\user-center-v1.2.swagger.json `
-  --component-name "用户中心" `
-  --component-description "用户、组织、身份相关接口" `
-  --component-scene "用于用户详情、部门、状态、身份查询" `
-  --product-id SIM_PLATFORM_V2 `
-  --product-version 5.0 `
-  --product-name "仿真平台 V2" `
-  --component-version v1.3 `
-  --rebuild-index
-```
+补充要求：
 
-5. 导入同一组件的多个文档版本：
+- 不要改变 operation key，例如 `GET /xxx/yyy`。
+- 不要编造不存在的接口路径和字段。
+- 字段名必须保留原始英文名，同时补中文含义。
+- 对没有中文描述的返回字段，优先根据字段名、接口名、上下文推断，并在 `usage_notes` 标注“根据字段名推断”。
+- `business_terms` 和 `search_keywords` 应覆盖需求分析里用户可能说出的业务词。
+
+## 批量导入
+
+如果当前只是导入组件多版本接口知识，还不能确定某个平台版本使用哪个组件版本，不要传 `--component-version`，也不要传平台绑定参数。使用 `--allow-unbound` 表示这次只建立组件知识，后续再绑定平台基线。
 
 ```powershell
 python jobs\import_component_versions.py `
-  --component-id USER_CENTER `
-  --segment-id USER_CENTER_WEB `
-  --segment-name "用户中心 Web 段" `
-  --component-name "用户中心" `
-  --component-description "用户、组织、身份相关接口" `
-  --component-scene "用于用户详情、部门、状态、身份查询" `
-  --product-id SIM_PLATFORM_V2 `
-  --product-version 5.0 `
-  --product-name "仿真平台 V2" `
-  --component-version v1.3 `
-  --version v1.0=D:\docs\user-center-v1.0.swagger.json `
-  --version v1.2=D:\docs\user-center-v1.2.swagger.json `
+  --component-id AAA `
+  --segment-id AAA_SEARCH `
+  --segment-name "AAA检索服务" `
+  --component-name "AAA组件" `
+  --version v1.0=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\swagger\v1.0.swagger.json `
+  --version v1.1=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\swagger\v1.1.swagger.json `
+  --version v1.2=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\swagger\v1.2.swagger.json `
+  --enrichment-version v1.0=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\enrichment\v1.0.enrichment.json `
+  --enrichment-version v1.1=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\enrichment\v1.1.enrichment.json `
+  --enrichment-version v1.2=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\enrichment\v1.2.enrichment.json `
+  --allow-unbound `
   --rebuild-index
 ```
 
-6. 如果只是做不关联平台的组件实验，必须显式追加：
+如果多个版本共用一个 enrichment 文件，可使用 `--enrichment-file`；优先使用 `--enrichment-version`。
 
-```powershell
---allow-unbound
+## 可选：绑定平台基线
+
+只有当用户明确知道某个平台版本实际使用哪些组件版本时，才绑定平台基线。MCP 的 `find_apis_for_requirement` 依赖平台基线来确定组件范围。
+
+优先使用批量脚本 `jobs\import_product_baseline.py`。
+
+baseline JSON 示例：
+
+```json
+{
+  "product_id": "PPP",
+  "product_version": "2.5.0",
+  "product_name": "PPP平台",
+  "components": [
+    {
+      "component_id": "XRES",
+      "component_version": "2.4.0",
+      "component_name": "资源服务"
+    },
+    {
+      "component_id": "USER_CENTER",
+      "component_version": "1.7.0",
+      "component_name": "用户中心"
+    }
+  ]
+}
 ```
 
-7. 导入后验证：
-   - 执行 `python -m compileall .`。
-   - 调用 `KnowledgeService().list_component_doc_versions(component_id)`。
-   - 调用 `KnowledgeService().resolve_component_doc_version(component_id, component_version)`。
-   - 如果已有平台基线，调用 `KnowledgeService().find_apis_for_requirement(product_id, product_version, requirement_item, component_overrides=...)` 验证需求项能否找到 API。
-
-8. 如果历史数据已经导入但没有绑定平台基线，不要重导 Swagger，先补平台组件绑定：
+先 dry-run：
 
 ```powershell
-python jobs\bind_component_baseline.py `
-  --product-id SIM_PLATFORM_V2 `
+python jobs\import_product_baseline.py `
+  --baseline-file E:\AI\kb-import\PPP\2.5.0\baseline.json `
+  --dry-run
+```
+
+确认后入库：
+
+```powershell
+python jobs\import_product_baseline.py `
+  --baseline-file E:\AI\kb-import\PPP\2.5.0\baseline.json
+```
+
+也可以不用文件，直接传组件：
+
+```powershell
+python jobs\import_product_baseline.py `
+  --product-id PLATFORM_X `
   --product-version 5.0 `
-  --product-name "仿真平台 V2" `
-  --component-id USER_CENTER `
-  --component-version v1.3 `
-  --component-name "用户中心"
+  --product-name "某某平台" `
+  --component XRES=2.4.0 `
+  --component USER_CENTER=1.7.0
 ```
 
-## 规则
+如果平台版本下组件版本未知，不要猜测 `component_version`。
 
-- 同一个组件跨版本必须保持同一个 `component_id`。版本差异写入 `api_contract` 和 `api_lifecycle`，不要拆成多个组件。
-- 同一个组件下不同服务段使用 `segment_id` 区分，段不是独立组件。
-- `doc_version` 表示接口文档版本，例如 `v1.0`、`v1.2`、`v2.1`。
-- 平台基线只记录平台版本默认包含的组件版本。现场单独升级组件时，优先在 MCP 查询时通过 `component_overrides` 传入，不要默认给每个现场建基线。
-- 导入真实知识库时必须绑定平台基线；否则 `find_apis_for_requirement` 无法确定组件范围。
-- `product_id`、`component_id`、`segment_id` 不区分大小写，统一大写存储和查询。
-- 实验阶段默认全部审核入库。用户后续觉得查询为空或查询错误时，把人工确认结果转成 enrichment 或版本映射，再重新导入。
-- 批量导入多个版本时，最后统一重建向量索引，不要每导入一个版本就重建一次。
+## 去重和版本规则
+
+- `api_identity` 不按版本重复入库。同一 `component_id + segment_id + method + api_path` 只有一条接口身份。
+- `api_contract` 按 `doc_version` 存契约。
+- 契约完全一致时记录 `UNCHANGED`，避免重复保存相同契约。
+- `api_lifecycle` 记录 `ADDED`、`CHANGED`、`UNCHANGED`、`REMOVED`。
+- 建议按版本从低到高导入，批量脚本会自动排序。
+
+## 验证
+
+```powershell
+python -m py_compile jobs\import_component_versions.py jobs\import_swagger.py jobs\debug_api_search.py
+```
+
+```powershell
+python jobs\debug_api_search.py `
+  --product-id PLATFORM_X `
+  --product-version 5.0 `
+  --requirement "查询资源列表并返回权限名称" `
+  --vector-top-k 20 `
+  --json
+```
+
+查看：
+
+- `raw_vector_top`
+- `filtered_vector_top`
+- `final_matches`
+
+如果不同需求仍然返回固定接口，先运行：
+
+```powershell
+python jobs\rebuild_vector_indexes.py
+```
+
+## 执行原则
+
+- 先确认导入模式：组件多版本知识导入，还是平台基线绑定导入。
+- 组件多版本知识导入不要强制要求 `component_version`。
+- 用户要求清理时，先 dry-run，再执行 `--confirm`。
+- 生成 enrichment 模板后，必须补充中文业务语义再导入。
+- 批量导入时，最后统一 `--rebuild-index`。
+- 允许先用 `--allow-unbound` 导入组件多版本接口知识；但在使用 MCP 按平台需求查询前，必须通过 `import_product_baseline.py` 或等价流程绑定平台基线。
