@@ -44,6 +44,72 @@ class DesignRepository:
         )
 
     @staticmethod
+    def _json_to_search_text(value, max_chars: int = 4000) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value[:max_chars]
+        try:
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True
+            )[:max_chars]
+        except TypeError:
+            return str(value)[:max_chars]
+
+    @staticmethod
+    def _api_identity_content(api: ApiIdentity) -> str:
+        return (
+            f"component_id:{api.component_id} "
+            f"segment_id:{api.segment_id or 'default'} "
+            f"api_name:{api.api_name} "
+            f"method:{api.method} "
+            f"api_path:{api.api_path} "
+            f"capability_tags:{','.join(api.capability_tags or [])} "
+            f"scene:{api.scene} "
+            f"description:{api.description}"
+        )
+
+    @classmethod
+    def _api_contract_content(cls, contract: ApiContract) -> str:
+        return (
+            f"doc_version:{contract.doc_version} "
+            f"params_desc:{contract.params_desc} "
+            f"request_schema:{cls._json_to_search_text(contract.request_schema)} "
+            f"response_schema:{cls._json_to_search_text(contract.response_schema)} "
+            f"request_headers:{cls._json_to_search_text(contract.request_headers)} "
+            f"request_example:{cls._json_to_search_text(contract.request_example)} "
+            f"response_example:{cls._json_to_search_text(contract.response_example)} "
+            f"response_demo:{contract.response_demo} "
+            f"usage_notes:{contract.usage_notes}"
+        )
+
+    @classmethod
+    def build_api_search_content(
+            cls,
+            api: ApiIdentity,
+            contracts: ApiContract | list[ApiContract] | None = None
+    ) -> str:
+        if contracts is None:
+            contracts = []
+        elif isinstance(contracts, ApiContract):
+            contracts = [contracts]
+
+        parts = [
+            cls._api_identity_content(api)
+        ]
+        parts.extend(
+            cls._api_contract_content(contract)
+            for contract in contracts
+        )
+        return "\n".join(
+            part
+            for part in parts
+            if part
+        )
+
+    @staticmethod
     def _component_content(component: ComponentCatalog) -> str:
         return (
             f"组件:{component.component_id} "
@@ -459,6 +525,9 @@ class DesignRepository:
             )
             row_id = cur.fetchone()[0]
         self.conn.commit()
+        self.refresh_api_identity_content(
+            contract.api_identity_id
+        )
         return row_id
 
     def upsert_api_lifecycle(
@@ -754,6 +823,15 @@ class DesignRepository:
     ) -> list[ApiIdentity]:
         if not ids or not component_ids:
             return []
+        ordered_ids = []
+        seen_ids = set()
+        for item in ids:
+            api_id = int(item)
+            if api_id in seen_ids:
+                continue
+            seen_ids.add(api_id)
+            ordered_ids.append(api_id)
+
         component_ids = [
             normalize_identifier(component_id)
             for component_id in component_ids
@@ -768,11 +846,13 @@ class DesignRepository:
                 FROM api_identity
                 WHERE id = ANY(%s)
                 AND UPPER(component_id) = ANY(%s)
+                ORDER BY array_position(%s::bigint[], id)
                 LIMIT %s
                 """,
                 (
-                    ids,
+                    ordered_ids,
                     component_ids,
+                    ordered_ids,
                     limit
                 )
             )
@@ -830,6 +910,72 @@ class DesignRepository:
             for row in rows
         ]
 
+    def search_api_identities_by_keywords(
+            self,
+            keywords: list[str],
+            component_ids: list[str],
+            limit: int = 5
+    ) -> list[ApiIdentity]:
+        keywords = [
+            item.strip()
+            for item in keywords
+            if item and item.strip()
+        ]
+        if not keywords or not component_ids:
+            return []
+        component_ids = [
+            normalize_identifier(component_id)
+            for component_id in component_ids
+        ]
+        keyword_params = [
+            f"%{keyword}%"
+            for keyword in keywords[:30]
+        ]
+        where_expr = " OR ".join(
+            ["search_text ILIKE %s"] * len(keyword_params)
+        )
+        rank_expr = " + ".join(
+            ["CASE WHEN search_text ILIKE %s THEN 1 ELSE 0 END"] * len(keyword_params)
+        )
+
+        with self.conn.cursor(
+                cursor_factory=RealDictCursor
+        ) as cur:
+            cur.execute(
+                f"""
+                WITH candidate AS (
+                    SELECT
+                        *,
+                        concat_ws(
+                            ' ',
+                            api_name,
+                            api_path,
+                            scene,
+                            description,
+                            content
+                        ) AS search_text
+                    FROM api_identity
+                    WHERE UPPER(component_id) = ANY(%s)
+                )
+                SELECT *
+                FROM candidate
+                WHERE {where_expr}
+                ORDER BY ({rank_expr}) DESC, updated_at DESC
+                LIMIT %s
+                """,
+                (
+                    [component_ids]
+                    + keyword_params
+                    + keyword_params
+                    + [limit]
+                )
+            )
+            rows = cur.fetchall()
+        return [
+            self._to_api_identity(row)
+            for row in rows
+        ]
+
     def get_api_contract(
             self,
             api_identity_id: int,
@@ -856,6 +1002,61 @@ class DesignRepository:
             if row
             else None
         )
+
+    def list_api_contracts(
+            self,
+            api_identity_id: int
+    ) -> list[ApiContract]:
+        with self.conn.cursor(
+                cursor_factory=RealDictCursor
+        ) as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM api_contract
+                WHERE api_identity_id=%s
+                ORDER BY doc_version
+                """,
+                (api_identity_id,)
+            )
+            rows = cur.fetchall()
+        return [
+            self._to_api_contract(row)
+            for row in rows
+        ]
+
+    def refresh_api_identity_content(
+            self,
+            api_identity_id: int
+    ):
+        api_identity = self.get_api_identity_by_id(
+            api_identity_id
+        )
+        if not api_identity:
+            return
+
+        contracts = self.list_api_contracts(
+            api_identity_id
+        )
+        content = self.build_api_search_content(
+            api_identity,
+            contracts
+        )
+
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE api_identity
+                SET content=%s,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (
+                    content,
+                    api_identity_id
+                )
+            )
+        self.conn.commit()
 
     def list_api_contract_versions(
             self,

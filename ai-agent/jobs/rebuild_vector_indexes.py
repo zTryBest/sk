@@ -49,12 +49,19 @@ def rebuild_api_identity_index():
         api_identity = repo.get_api_identity_by_id(
             api_identity_id
         )
-        content = DesignRepository._api_identity_content(
-            api_identity
+        contracts = repo.list_api_contracts(
+            api_identity_id
+        )
+        content = DesignRepository.build_api_search_content(
+            api_identity,
+            contracts
         )
         store.add_vector(
             db_id=api_identity_id,
             embedding=service._get_embedding(content)
+        )
+        repo.refresh_api_identity_content(
+            api_identity_id
         )
 
     logger.info(

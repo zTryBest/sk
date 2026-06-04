@@ -399,7 +399,33 @@ def parse_operations(
                 or []
             )
             scene = extra.get("scene", "")
-            usage_notes = extra.get("usage_notes", "")
+            usage_note_parts = [
+                extra.get("usage_notes", "")
+            ]
+            for extra_key in (
+                    "business_terms",
+                    "search_keywords",
+                    "request_field_notes",
+                    "response_field_notes",
+                    "request_value_notes",
+                    "response_value_notes"
+            ):
+                extra_value = extra.get(extra_key)
+                if not extra_value:
+                    continue
+                usage_note_parts.append(
+                    f"{extra_key}: {json.dumps(extra_value, ensure_ascii=False)}"
+                )
+            usage_notes = "\n".join(
+                item
+                for item in usage_note_parts
+                if item
+            )
+
+            parsed_response_schema = response_schema(
+                swagger,
+                operation
+            )
 
             operations.append({
                 "key": key,
@@ -412,11 +438,8 @@ def parse_operations(
                 "capability_tags": tags,
                 "scene": scene,
                 "params_desc": extra.get("params_desc") or params_desc,
-                "request_schema": request_schema,
-                "response_schema": response_schema(
-                    swagger,
-                    operation
-                ),
+                "request_schema": extra.get("request_schema") or request_schema,
+                "response_schema": extra.get("response_schema") or parsed_response_schema,
                 "request_headers": extra.get("request_headers", {}),
                 "request_example": extra.get("request_example", {}),
                 "response_example": extra.get("response_example", {}),
@@ -449,6 +472,16 @@ def emit_enrichment_template(
                 "capability_tags": item["capability_tags"],
                 "scene": item["scene"],
                 "description": item["description"],
+                "business_terms": [],
+                "search_keywords": [],
+                "request_field_notes": {},
+                "response_field_notes": {},
+                "request_value_notes": {},
+                "response_value_notes": {},
+                "params_desc": item["params_desc"],
+                "request_example": item["request_example"],
+                "response_example": item["response_example"],
+                "response_demo": item["response_demo"],
                 "usage_notes": item["usage_notes"]
             }
             for item in operations

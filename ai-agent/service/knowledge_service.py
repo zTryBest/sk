@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import re
 
 from openai import OpenAI
 
@@ -280,6 +281,70 @@ class KnowledgeService:
             "message": "组件版本到接口文档版本的人工映射已保存"
         }
 
+    @staticmethod
+    def _extract_search_terms(text: str) -> list[str]:
+        if not text:
+            return []
+
+        stopwords = {
+            "需要",
+            "支持",
+            "实现",
+            "进行",
+            "根据",
+            "接口",
+            "功能",
+            "字段",
+            "信息",
+            "数据",
+            "返回",
+            "请求",
+        }
+        terms = []
+        normalized = text.lower()
+
+        terms.extend(
+            re.findall(
+                r"[a-zA-Z][a-zA-Z0-9_./:-]{1,}|[0-9]+",
+                normalized
+            )
+        )
+
+        for chunk in re.findall(r"[\u4e00-\u9fff]+", text):
+            if 2 <= len(chunk) <= 6:
+                terms.append(chunk)
+            for size in (2, 3, 4):
+                if len(chunk) <= size:
+                    continue
+                for start in range(0, len(chunk) - size + 1):
+                    terms.append(chunk[start:start + size])
+
+        result = []
+        seen = set()
+        for term in terms:
+            term = term.strip().lower()
+            if len(term) < 2 or term in stopwords or term in seen:
+                continue
+            seen.add(term)
+            result.append(term)
+            if len(result) >= 40:
+                break
+        return result
+
+    @staticmethod
+    def _term_overlap_score(
+            terms: list[str],
+            content: str
+    ) -> int:
+        if not terms or not content:
+            return 0
+        content = content.lower()
+        return sum(
+            1
+            for term in terms
+            if term.lower() in content
+        )
+
     def find_apis_for_requirement(
             self,
             product_id: str,
@@ -320,6 +385,9 @@ class KnowledgeService:
         component_ids = list(
             component_versions.keys()
         )
+        search_terms = self._extract_search_terms(
+            requirement_item
+        )
 
         matched_apis = []
         missing_info = []
@@ -344,26 +412,45 @@ class KnowledgeService:
                 identities = self.design_repo.find_api_identities_by_ids(
                     ids=candidate_ids,
                     component_ids=component_ids,
-                    limit=limit * 3
-                )
-                identities.sort(
-                    key=lambda item: score_map.get(item.id, 0),
-                    reverse=True
+                    limit=max(limit * 5, 25)
                 )
 
+                vector_matches = []
                 for identity in identities:
                     resolved = self._resolve_api_contract(
                         api_identity=identity,
                         component_version=component_versions[identity.component_id],
                         component_source=component_sources[identity.component_id]
                     )
+                    search_content = self.design_repo.build_api_search_content(
+                        identity,
+                        resolved.api_contract
+                    )
+                    keyword_score = self._term_overlap_score(
+                        search_terms,
+                        search_content
+                    )
+                    vector_score = float(
+                        score_map.get(identity.id) or 0
+                    )
+                    combined_score = vector_score + min(
+                        keyword_score * 0.03,
+                        0.3
+                    )
                     item = resolved.to_dict()
-                    item["score"] = score_map.get(identity.id)
-                    item["match_source"] = "VECTOR"
+                    item["score"] = combined_score
+                    item["vector_score"] = vector_score
+                    item["keyword_score"] = keyword_score
+                    item["match_source"] = "HYBRID_VECTOR"
                     item["match_reason"] = "接口身份语义信息与需求分解项相似"
-                    matched_apis.append(item)
-                    if len(matched_apis) >= limit:
-                        break
+                    vector_matches.append(item)
+                vector_matches.sort(
+                    key=lambda item: item["score"],
+                    reverse=True
+                )
+                matched_apis.extend(
+                    vector_matches[:limit]
+                )
             except Exception as e:
                 missing_info.append(
                     f"语义检索不可用，已降级为关键词检索: {e}"
@@ -374,10 +461,10 @@ class KnowledgeService:
             )
 
         if len(matched_apis) < limit:
-            keyword_identities = self.design_repo.search_api_identities_by_keyword(
-                keyword=requirement_item,
+            keyword_identities = self.design_repo.search_api_identities_by_keywords(
+                keywords=search_terms or [requirement_item],
                 component_ids=component_ids,
-                limit=limit
+                limit=max(limit * 3, 10)
             )
             existing_ids = {
                 item["api_identity"]["id"]
@@ -395,6 +482,13 @@ class KnowledgeService:
                 )
                 item = resolved.to_dict()
                 item["score"] = None
+                item["keyword_score"] = self._term_overlap_score(
+                    search_terms,
+                    self.design_repo.build_api_search_content(
+                        identity,
+                        resolved.api_contract
+                    )
+                )
                 item["match_source"] = "KEYWORD"
                 item["match_reason"] = "接口身份关键词信息与需求分解项匹配"
                 matched_apis.append(item)
