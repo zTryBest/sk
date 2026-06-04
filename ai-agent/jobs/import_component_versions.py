@@ -53,6 +53,7 @@ def import_component_versions(
         component_version: str = "",
         enrichment_file: str | None = None,
         enrichment_files: dict[str, str] | None = None,
+        enrichment_dir: str | None = None,
         path_prefix: str | None = None,
         allow_unbound: bool = False,
         rebuild_index: bool = False
@@ -69,6 +70,15 @@ def import_component_versions(
         list(version_file_map.keys())
     )
     enrichment_files = enrichment_files or {}
+    if enrichment_dir:
+        enrichment_path = Path(enrichment_dir)
+        for doc_version in ordered_doc_versions:
+            candidate = enrichment_path / f"{doc_version}.enrichment.json"
+            if candidate.exists():
+                enrichment_files.setdefault(
+                    doc_version,
+                    str(candidate)
+                )
     summaries = []
 
     for doc_version in ordered_doc_versions:
@@ -165,6 +175,14 @@ def main():
     parser.add_argument("--component-version", default="")
     parser.add_argument("--enrichment-file", default=None)
     parser.add_argument(
+        "--enrichment-dir",
+        default=None,
+        help=(
+            "Directory containing DOC_VERSION.enrichment.json files. "
+            "Used as a convenient alternative to repeated --enrichment-version."
+        )
+    )
+    parser.add_argument(
         "--enrichment-version",
         action="append",
         default=[],
@@ -207,6 +225,7 @@ def main():
         component_version=args.component_version,
         enrichment_file=args.enrichment_file,
         enrichment_files=dict(args.enrichment_version),
+        enrichment_dir=args.enrichment_dir,
         path_prefix=args.path_prefix,
         allow_unbound=args.allow_unbound,
         rebuild_index=args.rebuild_index

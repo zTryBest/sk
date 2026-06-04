@@ -60,27 +60,115 @@ def local_ref(root: dict[str, Any], ref: str):
 def resolve_schema(
         root: dict[str, Any],
         schema: Any,
-        depth: int = 0
+        depth: int = 0,
+        seen_refs: set[str] | None = None
 ):
-    if depth > 5:
+    if depth > 20:
         return schema
+    if seen_refs is None:
+        seen_refs = set()
 
     if isinstance(schema, dict):
         if "$ref" in schema:
+            ref = schema["$ref"]
+            if ref in seen_refs:
+                return {
+                    "$ref": ref,
+                    "circular_ref": True
+                }
+            branch_seen_refs = set(
+                seen_refs
+            )
+            branch_seen_refs.add(ref)
+            resolved = resolve_schema(
+                root,
+                local_ref(root, ref),
+                depth + 1,
+                branch_seen_refs
+            )
+            siblings = {
+                key: value
+                for key, value in schema.items()
+                if key != "$ref"
+            }
+            if siblings and isinstance(resolved, dict):
+                merged = dict(resolved)
+                merged.update(
+                    resolve_schema(
+                        root,
+                        siblings,
+                        depth + 1,
+                        branch_seen_refs
+                    )
+                )
+                return merged
+            return resolved
+
+        if "allOf" in schema:
+            merged = {
+                key: value
+                for key, value in schema.items()
+                if key != "allOf"
+            }
+            merged_properties = dict(
+                merged.get("properties") or {}
+            )
+            merged_required = list(
+                merged.get("required") or []
+            )
+            for item in schema.get("allOf") or []:
+                resolved = resolve_schema(
+                    root,
+                    item,
+                    depth + 1,
+                    seen_refs
+                )
+                if not isinstance(resolved, dict):
+                    continue
+                merged_properties.update(
+                    resolved.get("properties") or {}
+                )
+                for field in resolved.get("required") or []:
+                    if field not in merged_required:
+                        merged_required.append(field)
+                for key, value in resolved.items():
+                    if key not in {
+                            "properties",
+                            "required"
+                    }:
+                        merged.setdefault(
+                            key,
+                            value
+                        )
+            if merged_properties:
+                merged["properties"] = merged_properties
+            if merged_required:
+                merged["required"] = merged_required
             return resolve_schema(
                 root,
-                local_ref(root, schema["$ref"]),
-                depth + 1
+                merged,
+                depth + 1,
+                seen_refs
             )
 
         return {
-            key: resolve_schema(root, value, depth + 1)
+            key: resolve_schema(
+                root,
+                value,
+                depth + 1,
+                seen_refs
+            )
             for key, value in schema.items()
         }
 
     if isinstance(schema, list):
         return [
-            resolve_schema(root, item, depth + 1)
+            resolve_schema(
+                root,
+                item,
+                depth + 1,
+                seen_refs
+            )
             for item in schema
         ]
 
@@ -88,37 +176,300 @@ def resolve_schema(
 
 
 def compact_schema(schema: Any):
+    if isinstance(schema, list):
+        return [
+            compact_schema(item)
+            for item in schema
+        ]
+
     if not isinstance(schema, dict):
         return schema or {}
 
-    if "type" in schema:
-        result = {
-            "type": schema.get("type")
-        }
+    result = {}
+    schema_type = schema.get("type")
+    if not schema_type:
         if "properties" in schema:
-            result["properties"] = {
-                key: compact_schema(value)
-                for key, value in schema["properties"].items()
-            }
-        if "items" in schema:
-            result["items"] = compact_schema(
-                schema["items"]
-            )
-        if "required" in schema:
-            result["required"] = schema["required"]
-        return result
+            schema_type = "object"
+        elif "items" in schema:
+            schema_type = "array"
+    if schema_type:
+        result["type"] = schema_type
+
+    for key in (
+            "format",
+            "title",
+            "description",
+            "enum",
+            "default",
+            "example",
+            "nullable",
+            "circular_ref"
+    ):
+        if key in schema:
+            result[key] = schema[key]
 
     if "properties" in schema:
-        return {
-            "type": "object",
-            "properties": {
+        result["properties"] = {
                 key: compact_schema(value)
                 for key, value in schema["properties"].items()
-            },
-            "required": schema.get("required", [])
         }
+    if "items" in schema:
+        result["items"] = compact_schema(
+            schema["items"]
+        )
+    if "additionalProperties" in schema:
+        result["additionalProperties"] = compact_schema(
+            schema["additionalProperties"]
+        )
+    if "required" in schema:
+        result["required"] = schema["required"]
+    for key in (
+            "oneOf",
+            "anyOf"
+    ):
+        if key in schema:
+            result[key] = compact_schema(
+                schema[key]
+            )
 
-    return schema
+    return result or schema
+
+
+def schema_type_name(schema: Any) -> str:
+    if not isinstance(schema, dict):
+        return type(schema).__name__
+    if schema.get("type"):
+        return schema["type"]
+    if "properties" in schema:
+        return "object"
+    if "items" in schema:
+        return "array"
+    return "unknown"
+
+
+def collect_schema_fields(
+        schema: Any,
+        prefix: str = "",
+        limit: int = 200
+) -> list[dict[str, Any]]:
+    fields = []
+
+    def walk(
+            node: Any,
+            path: str,
+            required: bool = False
+    ):
+        if len(fields) >= limit:
+            return
+        if not isinstance(node, dict) or not node:
+            return
+
+        node_type = schema_type_name(node)
+        if path:
+            fields.append({
+                "path": path,
+                "type": node_type,
+                "required": required,
+                "description": node.get("description", ""),
+                "format": node.get("format", ""),
+                "enum": node.get("enum", []),
+                "example": node.get("example", "")
+            })
+
+        if "properties" in node:
+            required_fields = set(
+                node.get("required") or []
+            )
+            for name, child in (node.get("properties") or {}).items():
+                child_path = (
+                    f"{path}.{name}"
+                    if path
+                    else name
+                )
+                walk(
+                    child,
+                    child_path,
+                    name in required_fields
+                )
+        if "items" in node:
+            item_path = (
+                f"{path}[]"
+                if path
+                else "[]"
+            )
+            walk(
+                node["items"],
+                item_path,
+                required
+            )
+        if isinstance(node.get("additionalProperties"), dict):
+            additional_path = (
+                f"{path}{{}}"
+                if path
+                else "{}"
+            )
+            walk(
+                node["additionalProperties"],
+                additional_path,
+                required
+            )
+
+    walk(
+        schema,
+        prefix
+    )
+    return fields
+
+
+def collect_request_fields(
+        request_schema: dict[str, Any],
+        limit: int = 200
+) -> list[dict[str, Any]]:
+    fields = []
+
+    for section in (
+            "path",
+            "query",
+            "header"
+    ):
+        for name, meta in (request_schema.get(section) or {}).items():
+            schema = meta.get("schema") or {}
+            fields.append({
+                "path": f"{section}.{name}",
+                "type": schema_type_name(schema),
+                "required": bool(meta.get("required")),
+                "description": meta.get("description", ""),
+                "format": (
+                    schema.get("format", "")
+                    if isinstance(schema, dict)
+                    else ""
+                ),
+                "enum": (
+                    schema.get("enum", [])
+                    if isinstance(schema, dict)
+                    else []
+                ),
+                "example": (
+                    schema.get("example", "")
+                    if isinstance(schema, dict)
+                    else ""
+                )
+            })
+            if len(fields) >= limit:
+                return fields
+            nested_fields = collect_schema_fields(
+                schema,
+                prefix=f"{section}.{name}",
+                limit=limit - len(fields)
+            )
+            fields.extend(
+                nested_fields[1:]
+                if nested_fields
+                and nested_fields[0]["path"] == f"{section}.{name}"
+                else nested_fields
+            )
+            if len(fields) >= limit:
+                return fields
+
+    body_schema = request_schema.get("body") or {}
+    fields.extend(
+        collect_schema_fields(
+            body_schema,
+            prefix="body",
+            limit=limit - len(fields)
+        )
+    )
+    return fields[:limit]
+
+
+def has_unresolved_ref(schema: Any) -> bool:
+    if isinstance(schema, dict):
+        if "$ref" in schema:
+            return True
+        return any(
+            has_unresolved_ref(value)
+            for value in schema.values()
+        )
+    if isinstance(schema, list):
+        return any(
+            has_unresolved_ref(item)
+            for item in schema
+        )
+    return False
+
+
+def schema_description_ratio(fields: list[dict[str, Any]]) -> float:
+    if not fields:
+        return 0.0
+    described = sum(
+        1
+        for field in fields
+        if field.get("description")
+    )
+    return round(
+        described / len(fields),
+        4
+    )
+
+
+def contract_quality(
+        method: str,
+        request_schema: dict[str, Any],
+        response_schema_value: dict[str, Any],
+        request_fields: list[dict[str, Any]],
+        response_fields: list[dict[str, Any]]
+) -> dict[str, Any]:
+    score = 1.0
+    reasons = []
+
+    method = method.upper()
+    has_request_fields = bool(request_fields)
+    has_response_fields = bool(response_fields)
+
+    if method in {
+            "POST",
+            "PUT",
+            "PATCH"
+    } and not has_request_fields:
+        score -= 0.35
+        reasons.append("request parameters are not explicit")
+    if not has_response_fields:
+        score -= 0.35
+        reasons.append("response schema is empty or unclear")
+    if has_unresolved_ref(request_schema) or has_unresolved_ref(response_schema_value):
+        score -= 0.25
+        reasons.append("schema contains unresolved $ref")
+
+    request_description_ratio = schema_description_ratio(
+        request_fields
+    )
+    response_description_ratio = schema_description_ratio(
+        response_fields
+    )
+    if has_request_fields and request_description_ratio < 0.3:
+        score -= 0.15
+        reasons.append("request fields lack descriptions")
+    if has_response_fields and response_description_ratio < 0.3:
+        score -= 0.15
+        reasons.append("response fields lack descriptions")
+
+    return {
+        "contract_confidence": max(
+            0.0,
+            round(score, 2)
+        ),
+        "request_description_ratio": request_description_ratio,
+        "response_description_ratio": response_description_ratio,
+        "reasons": reasons
+    }
+
+
+def field_note_seed(fields: list[dict[str, Any]]) -> dict[str, str]:
+    return {
+        field["path"]: field.get("description", "")
+        for field in fields
+        if field.get("path")
+    }
 
 
 def merge_parameters(
@@ -408,7 +759,12 @@ def parse_operations(
                     "request_field_notes",
                     "response_field_notes",
                     "request_value_notes",
-                    "response_value_notes"
+                    "response_value_notes",
+                    "contract_confidence",
+                    "contract_quality",
+                    "confidence_reason",
+                    "schema_analysis",
+                    "validation_notes"
             ):
                 extra_value = extra.get(extra_key)
                 if not extra_value:
@@ -426,6 +782,28 @@ def parse_operations(
                 swagger,
                 operation
             )
+            request_schema_final = (
+                extra.get("request_schema")
+                or request_schema
+            )
+            response_schema_final = (
+                extra.get("response_schema")
+                or parsed_response_schema
+            )
+            request_fields = collect_request_fields(
+                request_schema_final
+            )
+            response_fields = collect_schema_fields(
+                response_schema_final,
+                prefix="response"
+            )
+            quality = contract_quality(
+                method=method,
+                request_schema=request_schema_final,
+                response_schema_value=response_schema_final,
+                request_fields=request_fields,
+                response_fields=response_fields
+            )
 
             operations.append({
                 "key": key,
@@ -438,8 +816,11 @@ def parse_operations(
                 "capability_tags": tags,
                 "scene": scene,
                 "params_desc": extra.get("params_desc") or params_desc,
-                "request_schema": extra.get("request_schema") or request_schema,
-                "response_schema": extra.get("response_schema") or parsed_response_schema,
+                "request_schema": request_schema_final,
+                "response_schema": response_schema_final,
+                "request_fields": request_fields,
+                "response_fields": response_fields,
+                "contract_quality": quality,
                 "request_headers": extra.get("request_headers", {}),
                 "request_example": extra.get("request_example", {}),
                 "response_example": extra.get("response_example", {}),
@@ -474,11 +855,24 @@ def emit_enrichment_template(
                 "description": item["description"],
                 "business_terms": [],
                 "search_keywords": [],
-                "request_field_notes": {},
-                "response_field_notes": {},
+                "request_field_notes": field_note_seed(
+                    item["request_fields"]
+                ),
+                "response_field_notes": field_note_seed(
+                    item["response_fields"]
+                ),
                 "request_value_notes": {},
                 "response_value_notes": {},
                 "params_desc": item["params_desc"],
+                "request_schema": item["request_schema"],
+                "response_schema": item["response_schema"],
+                "request_field_candidates": item["request_fields"],
+                "response_field_candidates": item["response_fields"],
+                "contract_quality": item["contract_quality"],
+                "contract_confidence": item["contract_quality"]["contract_confidence"],
+                "confidence_reason": "; ".join(
+                    item["contract_quality"]["reasons"]
+                ),
                 "request_example": item["request_example"],
                 "response_example": item["response_example"],
                 "response_demo": item["response_demo"],
@@ -487,6 +881,10 @@ def emit_enrichment_template(
             for item in operations
         }
     }
+    Path(output_file).parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
     with open(
             output_file,
             "w",

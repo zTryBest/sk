@@ -37,21 +37,27 @@ def _extract_schema_snapshot(response_text: str):
     except json.JSONDecodeError:
         return {}
 
-    if isinstance(payload, dict):
+    def walk(value):
+        if isinstance(value, dict):
+            return {
+                key: walk(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            if not value:
+                return {
+                    "type": "list",
+                    "item_schema": {}
+                }
+            return {
+                "type": "list",
+                "item_schema": walk(value[0])
+            }
         return {
-            key: type(value).__name__
-            for key, value in payload.items()
+            "type": type(value).__name__
         }
 
-    if isinstance(payload, list):
-        return {
-            "type": "list",
-            "item_count": len(payload)
-        }
-
-    return {
-        "type": type(payload).__name__
-    }
+    return walk(payload)
 
 
 def _call_api(

@@ -111,6 +111,18 @@ python jobs\cleanup_dirty_knowledge.py `
 
 ## 生成 enrichment 模板
 
+如果 enrichment 目录为空，AI 必须自动生成 enrichment 文件并保存到 enrichment 目录，不能要求用户人工创建。
+
+优先批量生成：
+
+```powershell
+python jobs\prepare_enrichment_files.py `
+  --swagger-dir E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\swagger `
+  --enrichment-dir E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\enrichment
+```
+
+也可以对单个 Swagger 版本生成 enrichment 模板：
+
 ```powershell
 python jobs\import_swagger.py `
   --component-id AAA `
@@ -120,7 +132,7 @@ python jobs\import_swagger.py `
   --emit-enrichment-template E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\enrichment\v1.0.enrichment.json
 ```
 
-每个 Swagger 版本生成一个 enrichment 模板。
+生成的 enrichment 文件必须保留在 enrichment 目录，作为 AI 生成知识的审计记录。
 
 ## AI 补充 enrichment
 
@@ -129,8 +141,12 @@ python jobs\import_swagger.py `
 - 不要改变 operation key，例如 `GET /xxx/yyy`。
 - 不要编造不存在的接口路径和字段。
 - 字段名必须保留原始英文名，同时补中文含义。
+- 优先分析 `request_schema`、`response_schema`、`request_field_candidates`、`response_field_candidates`。
+- 用请求参数和响应参数反推 `api_name`、`description`、`scene`、`business_terms` 和 `search_keywords`。
 - 对没有中文描述的返回字段，优先根据字段名、接口名、上下文推断，并在 `usage_notes` 标注“根据字段名推断”。
+- 如果请求参数或响应参数不明确，降低 `contract_confidence`，并在 `confidence_reason` 中说明原因。
 - `business_terms` 和 `search_keywords` 应覆盖需求分析里用户可能说出的业务词。
+- 补充完成后必须写回 enrichment 文件，导入时优先通过 `--enrichment-dir` 自动匹配这些文件。
 
 ## 批量导入
 
@@ -145,14 +161,12 @@ python jobs\import_component_versions.py `
   --version v1.0=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\swagger\v1.0.swagger.json `
   --version v1.1=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\swagger\v1.1.swagger.json `
   --version v1.2=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\swagger\v1.2.swagger.json `
-  --enrichment-version v1.0=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\enrichment\v1.0.enrichment.json `
-  --enrichment-version v1.1=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\enrichment\v1.1.enrichment.json `
-  --enrichment-version v1.2=E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\enrichment\v1.2.enrichment.json `
+  --enrichment-dir E:\AI\kb-import\PLATFORM_X\5.0\AAA\AAA_SEARCH\enrichment `
   --allow-unbound `
   --rebuild-index
 ```
 
-如果多个版本共用一个 enrichment 文件，可使用 `--enrichment-file`；优先使用 `--enrichment-version`。
+优先使用 `--enrichment-dir`。如果 enrichment 文件名不是 `doc_version.enrichment.json`，再使用 `--enrichment-version` 单独指定。多个版本共用一个 enrichment 文件时可使用 `--enrichment-file`。
 
 ## 可选：绑定平台基线
 
@@ -221,7 +235,7 @@ python jobs\import_product_baseline.py `
 ## 验证
 
 ```powershell
-python -m py_compile jobs\import_component_versions.py jobs\import_swagger.py jobs\debug_api_search.py
+python -m py_compile jobs\import_component_versions.py jobs\import_swagger.py jobs\debug_api_search.py jobs\prepare_enrichment_files.py jobs\export_validation_enrichment.py
 ```
 
 ```powershell
@@ -244,6 +258,17 @@ python jobs\debug_api_search.py `
 ```powershell
 python jobs\rebuild_vector_indexes.py
 ```
+
+如果已经配置真实测试环境并运行接口验证任务，验证结果要反哺 enrichment：
+
+```powershell
+python jobs\export_validation_enrichment.py `
+  --component-id AAA `
+  --segment-id AAA_SEARCH `
+  --output-file E:\AI\kb-import\AAA\AAA_SEARCH\enrichment\validation.suggestions.json
+```
+
+生成的 `validation.suggestions.json` 只作为建议文件。AI 需要读取它，与正式 `*.enrichment.json` 对比后再合并，不能无审计地覆盖正式 enrichment。
 
 ## 执行原则
 
