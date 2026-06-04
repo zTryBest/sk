@@ -1,0 +1,59 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "description": "Provides resource search APIs.",
+    "version": "2.4.0.RELEASE",
+    "title": "Resource Search Service"
+  },
+  "basePath": "/xres-search/service/rs",
+  "paths": {
+    "/resource/query": {
+      "get": {
+        "summary": "Search resources",
+        "description": "Search resources by keyword.",
+        "tags": ["resource", "search"],
+        "parameters": [
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": true,
+            "description": "Search keyword.",
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search result.",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "total": {
+                  "type": "integer"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/ResourceItem"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "ResourceItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

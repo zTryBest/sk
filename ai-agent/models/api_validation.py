@@ -17,6 +17,7 @@ class ApiValidationRecord:
     request_method: str
     request_headers: dict[str, Any]
     request_body: dict[str, Any]
+    segment_id: str = ""
     response_status: int | None = None
     response_body: str = ""
     response_schema_snapshot: dict[str, Any] = None
@@ -40,6 +41,7 @@ class ApiValidationRecord:
             "product_id": self.product_id,
             "product_version": self.product_version,
             "component_id": self.component_id,
+            "segment_id": self.segment_id,
             "component_version": self.component_version,
             "test_env": self.test_env,
             "request_url": self.request_url,

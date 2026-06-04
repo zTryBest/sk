@@ -6,6 +6,7 @@ import logging
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -15,9 +16,11 @@ from models.design_phase import (  # noqa: E402
     ApiIdentity,
     ComponentCatalog,
     ComponentDocVersion,
+    ComponentSegment,
     ProductComponentBaseline,
 )
 from repository.design_repository import DesignRepository  # noqa: E402
+from utils.identifier_utils import normalize_identifier  # noqa: E402
 
 
 HTTP_METHODS = {
@@ -271,6 +274,57 @@ def operation_key(method: str, path: str):
     return f"{method.upper()} {path}"
 
 
+def normalize_path(path: str) -> str:
+    path = (path or "").strip()
+    if not path:
+        return ""
+    return "/" + path.strip("/")
+
+
+def join_paths(prefix: str, path: str) -> str:
+    prefix = normalize_path(prefix)
+    path = normalize_path(path)
+
+    if not prefix:
+        return path or "/"
+    if not path or path == "/":
+        return prefix
+    return f"{prefix.rstrip('/')}/{path.lstrip('/')}"
+
+
+def openapi3_server_path(swagger: dict[str, Any]) -> str:
+    servers = swagger.get("servers") or []
+    if not servers:
+        return ""
+
+    first_server = servers[0] or {}
+    url = first_server.get("url", "")
+    if not url:
+        return ""
+
+    parsed = urlparse(url)
+    if parsed.scheme or parsed.netloc:
+        return parsed.path or ""
+
+    return url
+
+
+def swagger_path_prefix(
+        swagger: dict[str, Any],
+        path_prefix: str | None = None
+) -> str:
+    if path_prefix is not None:
+        return path_prefix
+
+    if swagger.get("basePath"):
+        return swagger.get("basePath") or ""
+
+    if str(swagger.get("openapi", "")).startswith("3"):
+        return openapi3_server_path(swagger)
+
+    return ""
+
+
 def load_enrichment(path: str | None):
     if not path:
         return {}
@@ -281,11 +335,16 @@ def load_enrichment(path: str | None):
 
 def parse_operations(
         swagger: dict[str, Any],
-        enrichment: dict[str, Any]
+        enrichment: dict[str, Any],
+        path_prefix: str | None = None
 ):
     operations = []
     paths = swagger.get("paths") or {}
     is_openapi3 = str(swagger.get("openapi", "")).startswith("3")
+    prefix = swagger_path_prefix(
+        swagger,
+        path_prefix=path_prefix
+    )
 
     for path, path_item in paths.items():
         if not isinstance(path_item, dict):
@@ -298,7 +357,11 @@ def parse_operations(
             if not isinstance(operation, dict):
                 continue
 
-            key = operation_key(method, path)
+            full_path = join_paths(
+                prefix,
+                path
+            )
+            key = operation_key(method, full_path)
             extra = enrichment.get(key, {})
 
             parameters = merge_parameters(
@@ -341,7 +404,9 @@ def parse_operations(
             operations.append({
                 "key": key,
                 "method": method.upper(),
-                "path": path,
+                "path": full_path,
+                "raw_path": path,
+                "path_prefix": prefix,
                 "api_name": api_name,
                 "description": description,
                 "capability_tags": tags,
@@ -368,12 +433,14 @@ def parse_operations(
 
 def emit_enrichment_template(
         swagger_file: str,
-        output_file: str
+        output_file: str,
+        path_prefix: str | None = None
 ):
     swagger = load_json(swagger_file)
     operations = parse_operations(
         swagger,
-        enrichment={}
+        enrichment={},
+        path_prefix=path_prefix
     )
     template = {
         "operations": {
@@ -404,6 +471,10 @@ def import_swagger(
         component_id: str,
         doc_version: str,
         swagger_file: str,
+        segment_id: str = "",
+        segment_name: str = "",
+        segment_description: str = "",
+        segment_scene: str = "",
         component_name: str = "",
         component_description: str = "",
         component_scene: str = "",
@@ -414,14 +485,35 @@ def import_swagger(
         product_description: str = "",
         component_version: str = "",
         enrichment_file: str | None = None,
+        path_prefix: str | None = None,
+        allow_unbound: bool = False,
         rebuild_index: bool = False
 ):
+    component_id = normalize_identifier(component_id)
+    segment_id = normalize_identifier(segment_id)
+    product_id = normalize_identifier(product_id)
+
+    if (
+            not allow_unbound
+            and not (
+                product_id
+                and product_version
+                and component_version
+            )
+    ):
+        raise ValueError(
+            "导入接口知识必须绑定平台基线，请提供 --product-id、"
+            "--product-version、--component-version；如果只是实验性导入，"
+            "请显式增加 --allow-unbound。"
+        )
+
     repo = DesignRepository()
     swagger = load_json(swagger_file)
     enrichment = load_enrichment(enrichment_file)
     operations = parse_operations(
         swagger,
-        enrichment
+        enrichment,
+        path_prefix=path_prefix
     )
 
     if component_name or component_description or component_scene:
@@ -431,6 +523,17 @@ def import_swagger(
                 component_name=component_name or component_id,
                 description=component_description,
                 scene=component_scene
+            )
+        )
+
+    if segment_id:
+        repo.upsert_component_segment(
+            ComponentSegment(
+                component_id=component_id,
+                segment_id=segment_id,
+                segment_name=segment_name or segment_id,
+                description=segment_description,
+                scene=segment_scene
             )
         )
 
@@ -453,6 +556,7 @@ def import_swagger(
     repo.upsert_component_doc_version(
         ComponentDocVersion(
             component_id=component_id,
+            segment_id=segment_id,
             doc_version=doc_version,
             doc_url=doc_url,
             crawl_status="SUCCESS"
@@ -461,6 +565,12 @@ def import_swagger(
 
     current_keys = set()
     stats = {
+        "component_id": component_id,
+        "segment_id": segment_id,
+        "path_prefix": swagger_path_prefix(
+            swagger,
+            path_prefix=path_prefix
+        ),
         "operations": len(operations),
         "identities_upserted": 0,
         "contracts_inserted_or_updated": 0,
@@ -478,6 +588,7 @@ def import_swagger(
         identity_id = repo.upsert_api_identity(
             ApiIdentity(
                 component_id=component_id,
+                segment_id=segment_id,
                 method=operation["method"],
                 api_path=operation["path"],
                 api_name=operation["api_name"],
@@ -542,7 +653,10 @@ def import_swagger(
             change_type=change_type
         )
 
-    for identity in repo.list_api_identities_for_component(component_id):
+    for identity in repo.list_api_identities_for_component(
+            component_id=component_id,
+            segment_id=segment_id
+    ):
         key = (
             identity.method.upper(),
             identity.api_path
@@ -575,6 +689,18 @@ def main():
     parser.add_argument("--component-id", required=True)
     parser.add_argument("--doc-version", required=True)
     parser.add_argument("--swagger-file", required=True)
+    parser.add_argument("--segment-id", default="")
+    parser.add_argument("--segment-name", default="")
+    parser.add_argument("--segment-description", default="")
+    parser.add_argument("--segment-scene", default="")
+    parser.add_argument(
+        "--path-prefix",
+        default=None,
+        help=(
+            "Override Swagger basePath/OpenAPI servers path. "
+            "Use an empty string to disable automatic prefixing."
+        )
+    )
     parser.add_argument("--component-name", default="")
     parser.add_argument("--component-description", default="")
     parser.add_argument("--component-scene", default="")
@@ -587,6 +713,14 @@ def main():
     parser.add_argument("--enrichment-file", default=None)
     parser.add_argument("--emit-enrichment-template", default="")
     parser.add_argument(
+        "--allow-unbound",
+        action="store_true",
+        help=(
+            "Allow importing component/API docs without product baseline binding. "
+            "Use only for experiments; MCP requirement lookup needs product binding."
+        )
+    )
+    parser.add_argument(
         "--rebuild-index",
         action="store_true",
         help="Rebuild the API identity vector index after import."
@@ -597,7 +731,8 @@ def main():
     if args.emit_enrichment_template:
         emit_enrichment_template(
             swagger_file=args.swagger_file,
-            output_file=args.emit_enrichment_template
+            output_file=args.emit_enrichment_template,
+            path_prefix=args.path_prefix
         )
         print(
             json.dumps(
@@ -615,6 +750,10 @@ def main():
         component_id=args.component_id,
         doc_version=args.doc_version,
         swagger_file=args.swagger_file,
+        segment_id=args.segment_id,
+        segment_name=args.segment_name,
+        segment_description=args.segment_description,
+        segment_scene=args.segment_scene,
         component_name=args.component_name,
         component_description=args.component_description,
         component_scene=args.component_scene,
@@ -625,6 +764,8 @@ def main():
         product_description=args.product_description,
         component_version=args.component_version,
         enrichment_file=args.enrichment_file,
+        path_prefix=args.path_prefix,
+        allow_unbound=args.allow_unbound,
         rebuild_index=args.rebuild_index
     )
 

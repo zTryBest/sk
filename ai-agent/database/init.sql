@@ -177,6 +177,7 @@ CREATE TABLE IF NOT EXISTS requirement_api_feedback (
     product_version TEXT NOT NULL,
     requirement_text TEXT NOT NULL,
     component_id TEXT NOT NULL,
+    segment_id TEXT NOT NULL DEFAULT '',
     component_version TEXT NOT NULL,
     api_path TEXT NOT NULL,
     api_name TEXT NOT NULL DEFAULT '',
@@ -195,6 +196,7 @@ CREATE TABLE IF NOT EXISTS requirement_api_feedback (
 );
 
 ALTER TABLE requirement_api_feedback
+    ADD COLUMN IF NOT EXISTS segment_id TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS method TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS api_identity_id BIGINT,
     ADD COLUMN IF NOT EXISTS api_contract_id BIGINT;
@@ -208,6 +210,7 @@ CREATE TABLE IF NOT EXISTS api_validation_record (
     product_id TEXT NOT NULL,
     product_version TEXT NOT NULL,
     component_id TEXT NOT NULL,
+    segment_id TEXT NOT NULL DEFAULT '',
     component_version TEXT NOT NULL,
     test_env TEXT NOT NULL,
     request_url TEXT NOT NULL,
@@ -227,6 +230,7 @@ CREATE TABLE IF NOT EXISTS api_validation_record (
 );
 
 ALTER TABLE api_validation_record
+    ADD COLUMN IF NOT EXISTS segment_id TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS api_identity_id BIGINT,
     ADD COLUMN IF NOT EXISTS api_contract_id BIGINT,
     ADD COLUMN IF NOT EXISTS resolved_component_version TEXT NOT NULL DEFAULT '',
@@ -265,6 +269,22 @@ CREATE TABLE IF NOT EXISTS component_catalog (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS component_segment (
+    id BIGSERIAL PRIMARY KEY,
+    component_id TEXT NOT NULL,
+    segment_id TEXT NOT NULL,
+    segment_name TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    scene TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (component_id, segment_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_component_segment_component
+    ON component_segment (component_id);
+
 CREATE TABLE IF NOT EXISTS product_component_baseline (
     id BIGSERIAL PRIMARY KEY,
     product_id TEXT NOT NULL,
@@ -283,21 +303,31 @@ CREATE INDEX IF NOT EXISTS idx_product_component_baseline_product
 CREATE TABLE IF NOT EXISTS component_doc_version (
     id BIGSERIAL PRIMARY KEY,
     component_id TEXT NOT NULL,
+    segment_id TEXT NOT NULL DEFAULT '',
     doc_version TEXT NOT NULL,
     doc_url TEXT NOT NULL DEFAULT '',
     crawl_status TEXT NOT NULL DEFAULT 'PENDING',
     last_crawled_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (component_id, doc_version)
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_component_doc_version_component
-    ON component_doc_version (component_id);
+ALTER TABLE component_doc_version
+    ADD COLUMN IF NOT EXISTS segment_id TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE component_doc_version
+    DROP CONSTRAINT IF EXISTS component_doc_version_component_id_doc_version_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_component_doc_version_segment
+    ON component_doc_version (component_id, segment_id, doc_version);
+
+CREATE INDEX IF NOT EXISTS idx_component_doc_version_component_segment
+    ON component_doc_version (component_id, segment_id);
 
 CREATE TABLE IF NOT EXISTS component_version_doc_mapping (
     id BIGSERIAL PRIMARY KEY,
     component_id TEXT NOT NULL,
+    segment_id TEXT NOT NULL DEFAULT '',
     component_version TEXT NOT NULL,
     doc_version TEXT NOT NULL,
     mapping_type TEXT NOT NULL DEFAULT 'MANUAL',
@@ -305,13 +335,22 @@ CREATE TABLE IF NOT EXISTS component_version_doc_mapping (
     reason TEXT NOT NULL DEFAULT '',
     created_by TEXT NOT NULL DEFAULT 'AI_AGENT',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (component_id, component_version)
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE component_version_doc_mapping
+    ADD COLUMN IF NOT EXISTS segment_id TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE component_version_doc_mapping
+    DROP CONSTRAINT IF EXISTS component_version_doc_mapping_component_id_component_version_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_component_version_doc_mapping_segment
+    ON component_version_doc_mapping (component_id, segment_id, component_version);
 
 CREATE TABLE IF NOT EXISTS api_identity (
     id BIGSERIAL PRIMARY KEY,
     component_id TEXT NOT NULL,
+    segment_id TEXT NOT NULL DEFAULT '',
     method TEXT NOT NULL,
     api_path TEXT NOT NULL,
     api_name TEXT NOT NULL,
@@ -320,12 +359,20 @@ CREATE TABLE IF NOT EXISTS api_identity (
     description TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (component_id, method, api_path)
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_api_identity_component
-    ON api_identity (component_id);
+ALTER TABLE api_identity
+    ADD COLUMN IF NOT EXISTS segment_id TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE api_identity
+    DROP CONSTRAINT IF EXISTS api_identity_component_id_method_api_path_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_api_identity_segment
+    ON api_identity (component_id, segment_id, method, api_path);
+
+CREATE INDEX IF NOT EXISTS idx_api_identity_component_segment
+    ON api_identity (component_id, segment_id);
 
 CREATE TABLE IF NOT EXISTS api_contract (
     id BIGSERIAL PRIMARY KEY,
@@ -364,6 +411,92 @@ CREATE TABLE IF NOT EXISTS api_lifecycle (
 
 CREATE INDEX IF NOT EXISTS idx_api_lifecycle_identity
     ON api_lifecycle (api_identity_id, doc_version);
+
+-- ---------------------------------------------------------------------------
+-- Identifier normalization.
+-- Keep product_id, component_id, and segment_id case-insensitive in practice by
+-- storing canonical uppercase values. Versions and API paths keep their source
+-- casing.
+-- ---------------------------------------------------------------------------
+
+UPDATE component_info
+SET
+    product_id = UPPER(product_id),
+    comp_id = UPPER(comp_id)
+WHERE product_id <> UPPER(product_id)
+   OR comp_id <> UPPER(comp_id);
+
+UPDATE best_practice
+SET product_id = UPPER(product_id)
+WHERE product_id <> UPPER(product_id);
+
+UPDATE knowledge_candidate
+SET
+    product_id = UPPER(product_id),
+    component_id = UPPER(component_id)
+WHERE product_id <> UPPER(product_id)
+   OR component_id <> UPPER(component_id);
+
+UPDATE requirement_api_feedback
+SET
+    product_id = UPPER(product_id),
+    component_id = UPPER(component_id),
+    segment_id = UPPER(segment_id)
+WHERE product_id <> UPPER(product_id)
+   OR component_id <> UPPER(component_id)
+   OR segment_id <> UPPER(segment_id);
+
+UPDATE api_validation_record
+SET
+    product_id = UPPER(product_id),
+    component_id = UPPER(component_id),
+    segment_id = UPPER(segment_id)
+WHERE product_id <> UPPER(product_id)
+   OR component_id <> UPPER(component_id)
+   OR segment_id <> UPPER(segment_id);
+
+UPDATE product_release
+SET product_id = UPPER(product_id)
+WHERE product_id <> UPPER(product_id);
+
+UPDATE component_catalog
+SET component_id = UPPER(component_id)
+WHERE component_id <> UPPER(component_id);
+
+UPDATE component_segment
+SET
+    component_id = UPPER(component_id),
+    segment_id = UPPER(segment_id)
+WHERE component_id <> UPPER(component_id)
+   OR segment_id <> UPPER(segment_id);
+
+UPDATE product_component_baseline
+SET
+    product_id = UPPER(product_id),
+    component_id = UPPER(component_id)
+WHERE product_id <> UPPER(product_id)
+   OR component_id <> UPPER(component_id);
+
+UPDATE component_doc_version
+SET
+    component_id = UPPER(component_id),
+    segment_id = UPPER(segment_id)
+WHERE component_id <> UPPER(component_id)
+   OR segment_id <> UPPER(segment_id);
+
+UPDATE component_version_doc_mapping
+SET
+    component_id = UPPER(component_id),
+    segment_id = UPPER(segment_id)
+WHERE component_id <> UPPER(component_id)
+   OR segment_id <> UPPER(segment_id);
+
+UPDATE api_identity
+SET
+    component_id = UPPER(component_id),
+    segment_id = UPPER(segment_id)
+WHERE component_id <> UPPER(component_id)
+   OR segment_id <> UPPER(segment_id);
 
 -- ---------------------------------------------------------------------------
 -- Permissions.

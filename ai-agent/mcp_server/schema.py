@@ -25,11 +25,25 @@ class ComponentDocVersionQuery(BaseModel):
     component_id: str = Field(
         description="组件标识。"
     )
+    segment_id: str | None = Field(
+        default=None,
+        description="组件段标识，例如 aaa-web、aaa-search；不传则返回该组件下所有段的文档版本。"
+    )
+
+
+class ComponentSegmentQuery(BaseModel):
+    component_id: str = Field(
+        description="组件标识。"
+    )
 
 
 class ComponentDocResolveQuery(BaseModel):
     component_id: str = Field(
         description="组件标识。"
+    )
+    segment_id: str = Field(
+        default="",
+        description="组件段标识，例如 aaa-web、aaa-search；为空表示组件默认段。"
     )
     component_version: str = Field(
         description="实际组件版本，允许混合格式，如 v1.3、1.3.0、2024.06。"
@@ -63,6 +77,10 @@ class RequirementApiQuery(ProductVersionQuery):
 class ApiDetailQuery(BaseModel):
     component_id: str = Field(
         description="组件标识。"
+    )
+    segment_id: str | None = Field(
+        default="",
+        description="组件段标识。若同一组件下多个段存在相同接口路径，必须传入该字段。"
     )
     component_version: str = Field(
         description="实际组件版本，用于解析接口文档版本和契约版本。"

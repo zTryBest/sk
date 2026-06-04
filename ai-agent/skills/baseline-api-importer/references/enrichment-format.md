@@ -5,7 +5,7 @@
 ```json
 {
   "operations": {
-    "GET /api/users/{userId}": {
+    "GET /xres-search/service/rs/api/users/{userId}": {
       "api_name": "查询用户详情",
       "capability_tags": ["用户", "用户资料", "组织机构"],
       "scene": "根据用户 ID 查询姓名、状态、部门、身份等展示信息。",
@@ -28,4 +28,4 @@
 }
 ```
 
-`operations` 的 key 必须使用 `METHOD path` 格式，其中 `METHOD` 大写，`path` 必须和 Swagger 中的路径完全一致。当前导入脚本会忽略未知字段。
+`operations` 的 key 必须使用 `METHOD path` 格式，其中 `METHOD` 大写。若 Swagger/OpenAPI 存在 `basePath` 或 `servers[].url` 路径前缀，`path` 使用导入后的完整路径，而不是原始 `paths` 里的短路径。当前导入脚本会忽略未知字段。

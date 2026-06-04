@@ -18,6 +18,10 @@ from models.design_phase import (
     ResolvedApiContract,
 )
 from repository.design_repository import DesignRepository
+from utils.identifier_utils import (
+    normalize_identifier,
+    normalize_identifier_map,
+)
 from utils.version_utils import find_nearest_doc_version
 from vector.factory import create_vector_store
 
@@ -74,10 +78,14 @@ class KnowledgeService:
             product_version: str,
             component_overrides: dict[str, str] | None = None
     ):
+        product_id = normalize_identifier(product_id)
+        component_overrides = normalize_identifier_map(
+            component_overrides
+        )
         components = self._resolve_product_components(
             product_id=product_id,
             product_version=product_version,
-            component_overrides=component_overrides or {}
+            component_overrides=component_overrides
         )
 
         return {
@@ -93,6 +101,10 @@ class KnowledgeService:
             product_version: str,
             component_overrides: dict[str, str]
     ) -> list[dict]:
+        product_id = normalize_identifier(product_id)
+        component_overrides = normalize_identifier_map(
+            component_overrides
+        )
         baseline_rows = self.design_repo.list_product_components(
             product_id=product_id,
             product_version=product_version
@@ -101,13 +113,20 @@ class KnowledgeService:
         components = []
 
         for row in baseline_rows:
-            component_id = row["component_id"]
+            component_id = normalize_identifier(row["component_id"])
             component_version = row["component_version"]
             source = row.get("source", "BASELINE")
 
             if component_id in component_overrides:
                 component_version = component_overrides[component_id]
                 source = "USER_OVERRIDE"
+
+            segments = [
+                dict(segment)
+                for segment in self.design_repo.list_component_segments(
+                    component_id=component_id
+                )
+            ]
 
             components.append({
                 "product_id": product_id,
@@ -117,6 +136,7 @@ class KnowledgeService:
                 "component_version": component_version,
                 "description": row.get("description", ""),
                 "scene": row.get("scene", ""),
+                "segments": segments,
                 "source": source
             })
 
@@ -135,38 +155,76 @@ class KnowledgeService:
                 "component_version": component_version,
                 "description": "",
                 "scene": "",
+                "segments": [
+                    dict(segment)
+                    for segment in self.design_repo.list_component_segments(
+                        component_id=component_id
+                    )
+                ],
                 "source": "USER_OVERRIDE_EXTRA"
             })
 
         return components
 
-    def list_component_doc_versions(
+    def list_component_segments(
             self,
             component_id: str
     ):
-        doc_versions = self.design_repo.list_component_doc_versions(
+        component_id = normalize_identifier(component_id)
+        segments = self.design_repo.list_component_segments(
             component_id=component_id
         )
 
         return {
             "component_id": component_id,
-            "doc_versions": doc_versions,
-            "count": len(doc_versions)
+            "segments": [
+                dict(segment)
+                for segment in segments
+            ],
+            "count": len(segments)
+        }
+
+    def list_component_doc_versions(
+            self,
+            component_id: str,
+            segment_id: str | None = None
+    ):
+        component_id = normalize_identifier(component_id)
+        if segment_id is not None:
+            segment_id = normalize_identifier(segment_id)
+        rows = self.design_repo.list_component_doc_version_rows(
+            component_id=component_id,
+            segment_id=segment_id
+        )
+
+        return {
+            "component_id": component_id,
+            "segment_id": segment_id,
+            "doc_versions": [
+                dict(row)
+                for row in rows
+            ],
+            "count": len(rows)
         }
 
     def resolve_component_doc_version(
             self,
             component_id: str,
-            component_version: str
+            component_version: str,
+            segment_id: str = ""
     ):
+        component_id = normalize_identifier(component_id)
+        segment_id = normalize_identifier(segment_id)
         manual_mapping = self.design_repo.get_component_doc_mapping(
             component_id=component_id,
-            component_version=component_version
+            component_version=component_version,
+            segment_id=segment_id
         )
 
         if manual_mapping:
             return {
                 "component_id": component_id,
+                "segment_id": segment_id,
                 "requested_component_version": component_version,
                 "resolved_doc_version": manual_mapping["doc_version"],
                 "match_level": manual_mapping["mapping_type"],
@@ -176,7 +234,8 @@ class KnowledgeService:
             }
 
         doc_versions = self.design_repo.list_component_doc_versions(
-            component_id=component_id
+            component_id=component_id,
+            segment_id=segment_id
         )
         resolved = find_nearest_doc_version(
             component_version=component_version,
@@ -185,6 +244,7 @@ class KnowledgeService:
 
         return {
             "component_id": component_id,
+            "segment_id": segment_id,
             "requested_component_version": component_version,
             "resolved_doc_version": resolved["doc_version"],
             "match_level": resolved["match_level"],
@@ -198,13 +258,17 @@ class KnowledgeService:
             component_id: str,
             component_version: str,
             doc_version: str,
+            segment_id: str = "",
             reason: str = "",
             created_by: str = "AI_AGENT"
     ):
+        component_id = normalize_identifier(component_id)
+        segment_id = normalize_identifier(segment_id)
         mapping_id = self.design_repo.upsert_component_version_doc_mapping(
             component_id=component_id,
             component_version=component_version,
             doc_version=doc_version,
+            segment_id=segment_id,
             mapping_type="MANUAL",
             confidence=1.0,
             reason=reason,
@@ -224,10 +288,14 @@ class KnowledgeService:
             component_overrides: dict[str, str] | None = None,
             limit: int = 5
     ):
+        product_id = normalize_identifier(product_id)
+        component_overrides = normalize_identifier_map(
+            component_overrides
+        )
         components = self._resolve_product_components(
             product_id=product_id,
             product_version=product_version,
-            component_overrides=component_overrides or {}
+            component_overrides=component_overrides
         )
 
         if not components:
@@ -356,7 +424,8 @@ class KnowledgeService:
     ) -> ResolvedApiContract:
         doc_resolution = self.resolve_component_doc_version(
             component_id=api_identity.component_id,
-            component_version=component_version
+            component_version=component_version,
+            segment_id=api_identity.segment_id or ""
         )
         doc_version = doc_resolution["resolved_doc_version"]
         contract = None
@@ -418,12 +487,17 @@ class KnowledgeService:
             component_id: str,
             method: str,
             api_path: str,
-            component_version: str
+            component_version: str,
+            segment_id: str | None = ""
     ):
+        component_id = normalize_identifier(component_id)
+        if segment_id is not None:
+            segment_id = normalize_identifier(segment_id)
         identity = self.design_repo.find_api_identity_by_key(
             component_id=component_id,
             method=method,
-            api_path=api_path
+            api_path=api_path,
+            segment_id=segment_id
         )
 
         if not identity:

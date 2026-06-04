@@ -17,6 +17,7 @@ from mcp_server.schema import (
     ApiDetailQuery,
     ComponentDocMappingSubmit,
     ComponentDocResolveQuery,
+    ComponentSegmentQuery,
     ComponentDocVersionQuery,
     ProductVersionQuery,
     RequirementApiQuery,
@@ -82,14 +83,33 @@ def list_product_components(req: ProductVersionQuery):
 
 
 @mcp.tool(
-    description="列出某个组件已经导入的接口文档版本。",
+    description="列出某个组件下面已经维护的组件段，例如 aaa-web、aaa-search。",
+    timeout=15
+)
+def list_component_segments(req: ComponentSegmentQuery):
+    try:
+        return success(
+            knowledge_service.list_component_segments(
+                component_id=req.component_id
+            )
+        )
+    except Exception as e:
+        return error(str(e))
+
+
+@mcp.tool(
+    description=(
+        "列出某个组件已经导入的接口文档版本。"
+        "可传 segment_id 精确到组件段；不传则返回该组件所有段的文档版本。"
+    ),
     timeout=15
 )
 def list_component_doc_versions(req: ComponentDocVersionQuery):
     try:
         return success(
             knowledge_service.list_component_doc_versions(
-                component_id=req.component_id
+                component_id=req.component_id,
+                segment_id=req.segment_id
             )
         )
     except Exception as e:
@@ -108,6 +128,7 @@ def resolve_component_doc_version(req: ComponentDocResolveQuery):
         return success(
             knowledge_service.resolve_component_doc_version(
                 component_id=req.component_id,
+                segment_id=req.segment_id,
                 component_version=req.component_version
             )
         )
@@ -127,6 +148,7 @@ def submit_component_version_doc_mapping(req: ComponentDocMappingSubmit):
         return success(
             knowledge_service.submit_component_version_doc_mapping(
                 component_id=req.component_id,
+                segment_id=req.segment_id,
                 component_version=req.component_version,
                 doc_version=req.doc_version,
                 reason=req.reason,
@@ -171,6 +193,7 @@ def get_api_detail(req: ApiDetailQuery):
         return success(
             knowledge_service.get_api_detail(
                 component_id=req.component_id,
+                segment_id=req.segment_id,
                 component_version=req.component_version,
                 method=req.method,
                 api_path=req.api_path

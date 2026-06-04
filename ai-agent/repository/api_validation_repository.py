@@ -32,6 +32,7 @@ class ApiValidationRepository:
                     product_id,
                     product_version,
                     component_id,
+                    segment_id,
                     component_version,
                     test_env,
                     request_url,
@@ -51,7 +52,7 @@ class ApiValidationRepository:
                 VALUES
                 (
                     %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                    %s,%s,%s,%s,%s,%s,%s,%s,%s
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s
                 )
                 RETURNING id
                 """,
@@ -60,6 +61,7 @@ class ApiValidationRepository:
                     record.product_id,
                     record.product_version,
                     record.component_id,
+                    record.segment_id,
                     record.component_version,
                     record.test_env,
                     record.request_url,

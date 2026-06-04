@@ -13,8 +13,10 @@ from models.design_phase import (
     ApiIdentity,
     ComponentCatalog,
     ComponentDocVersion,
+    ComponentSegment,
     ProductComponentBaseline,
 )
+from utils.identifier_utils import normalize_identifier
 
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,7 @@ class DesignRepository:
     def _api_identity_content(api: ApiIdentity) -> str:
         return (
             f"组件:{api.component_id} "
+            f"组件段:{api.segment_id or 'default'} "
             f"接口名称:{api.api_name} "
             f"方法:{api.method} "
             f"路径:{api.api_path} "
@@ -47,6 +50,16 @@ class DesignRepository:
             f"组件名称:{component.component_name} "
             f"描述:{component.description} "
             f"场景:{component.scene}"
+        )
+
+    @staticmethod
+    def _segment_content(segment: ComponentSegment) -> str:
+        return (
+            f"组件:{segment.component_id} "
+            f"组件段:{segment.segment_id} "
+            f"组件段名称:{segment.segment_name} "
+            f"描述:{segment.description} "
+            f"场景:{segment.scene}"
         )
 
     @staticmethod
@@ -76,6 +89,7 @@ class DesignRepository:
             product_name: str = "",
             description: str = ""
     ) -> int:
+        product_id = normalize_identifier(product_id)
         with self.conn.cursor() as cur:
             cur.execute(
                 """
@@ -109,6 +123,9 @@ class DesignRepository:
             self,
             component: ComponentCatalog
     ) -> int:
+        component.component_id = normalize_identifier(
+            component.component_id
+        )
         content = self._component_content(
             component
         )
@@ -145,10 +162,64 @@ class DesignRepository:
         self.conn.commit()
         return row_id
 
+    def upsert_component_segment(
+            self,
+            segment: ComponentSegment
+    ) -> int:
+        segment.component_id = normalize_identifier(
+            segment.component_id
+        )
+        segment.segment_id = normalize_identifier(
+            segment.segment_id
+        )
+        content = self._segment_content(
+            segment
+        )
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO component_segment
+                (
+                    component_id,
+                    segment_id,
+                    segment_name,
+                    description,
+                    scene,
+                    content
+                )
+                VALUES (%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (component_id, segment_id)
+                DO UPDATE SET
+                    segment_name=EXCLUDED.segment_name,
+                    description=EXCLUDED.description,
+                    scene=EXCLUDED.scene,
+                    content=EXCLUDED.content,
+                    updated_at=NOW()
+                RETURNING id
+                """,
+                (
+                    segment.component_id,
+                    segment.segment_id,
+                    segment.segment_name,
+                    segment.description,
+                    segment.scene,
+                    content
+                )
+            )
+            row_id = cur.fetchone()[0]
+        self.conn.commit()
+        return row_id
+
     def upsert_product_component_baseline(
             self,
             baseline: ProductComponentBaseline
     ) -> int:
+        baseline.product_id = normalize_identifier(
+            baseline.product_id
+        )
+        baseline.component_id = normalize_identifier(
+            baseline.component_id
+        )
         with self.conn.cursor() as cur:
             cur.execute(
                 """
@@ -184,18 +255,25 @@ class DesignRepository:
             self,
             doc: ComponentDocVersion
     ) -> int:
+        doc.component_id = normalize_identifier(
+            doc.component_id
+        )
+        doc.segment_id = normalize_identifier(
+            doc.segment_id
+        )
         with self.conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO component_doc_version
                 (
                     component_id,
+                    segment_id,
                     doc_version,
                     doc_url,
                     crawl_status
                 )
-                VALUES (%s,%s,%s,%s)
-                ON CONFLICT (component_id, doc_version)
+                VALUES (%s,%s,%s,%s,%s)
+                ON CONFLICT (component_id, segment_id, doc_version)
                 DO UPDATE SET
                     doc_url=EXCLUDED.doc_url,
                     crawl_status=EXCLUDED.crawl_status,
@@ -204,6 +282,7 @@ class DesignRepository:
                 """,
                 (
                     doc.component_id,
+                    doc.segment_id or "",
                     doc.doc_version,
                     doc.doc_url,
                     doc.crawl_status
@@ -218,17 +297,21 @@ class DesignRepository:
             component_id: str,
             component_version: str,
             doc_version: str,
+            segment_id: str = "",
             mapping_type: str = "MANUAL",
             confidence: float = 1.0,
             reason: str = "",
             created_by: str = "AI_AGENT"
     ) -> int:
+        component_id = normalize_identifier(component_id)
+        segment_id = normalize_identifier(segment_id)
         with self.conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO component_version_doc_mapping
                 (
                     component_id,
+                    segment_id,
                     component_version,
                     doc_version,
                     mapping_type,
@@ -236,8 +319,8 @@ class DesignRepository:
                     reason,
                     created_by
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (component_id, component_version)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (component_id, segment_id, component_version)
                 DO UPDATE SET
                     doc_version=EXCLUDED.doc_version,
                     mapping_type=EXCLUDED.mapping_type,
@@ -249,6 +332,7 @@ class DesignRepository:
                 """,
                 (
                     component_id,
+                    segment_id or "",
                     component_version,
                     doc_version,
                     mapping_type,
@@ -265,6 +349,12 @@ class DesignRepository:
             self,
             api: ApiIdentity
     ) -> int:
+        api.component_id = normalize_identifier(
+            api.component_id
+        )
+        api.segment_id = normalize_identifier(
+            api.segment_id
+        )
         method = api.method.upper()
         content = self._api_identity_content(
             api
@@ -275,6 +365,7 @@ class DesignRepository:
                 INSERT INTO api_identity
                 (
                     component_id,
+                    segment_id,
                     method,
                     api_path,
                     api_name,
@@ -283,8 +374,8 @@ class DesignRepository:
                     description,
                     content
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (component_id, method, api_path)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (component_id, segment_id, method, api_path)
                 DO UPDATE SET
                     api_name=EXCLUDED.api_name,
                     capability_tags=EXCLUDED.capability_tags,
@@ -296,6 +387,7 @@ class DesignRepository:
                 """,
                 (
                     api.component_id,
+                    api.segment_id or "",
                     method,
                     api.api_path,
                     api.api_name,
@@ -423,6 +515,7 @@ class DesignRepository:
             product_id: str,
             product_version: str
     ):
+        product_id = normalize_identifier(product_id)
         with self.conn.cursor(
                 cursor_factory=RealDictCursor
         ) as cur:
@@ -435,8 +528,8 @@ class DesignRepository:
                     c.scene
                 FROM product_component_baseline b
                 LEFT JOIN component_catalog c
-                    ON c.component_id = b.component_id
-                WHERE b.product_id=%s
+                    ON UPPER(c.component_id) = UPPER(b.component_id)
+                WHERE UPPER(b.product_id)=%s
                 AND b.product_version=%s
                 ORDER BY b.component_id
                 """,
@@ -447,30 +540,108 @@ class DesignRepository:
             )
             return cur.fetchall()
 
-    def list_component_doc_versions(
+    def list_component_segments(
             self,
             component_id: str
-    ) -> list[str]:
-        with self.conn.cursor() as cur:
+    ):
+        component_id = normalize_identifier(component_id)
+        with self.conn.cursor(
+                cursor_factory=RealDictCursor
+        ) as cur:
             cur.execute(
                 """
-                SELECT doc_version
-                FROM component_doc_version
-                WHERE component_id=%s
-                ORDER BY doc_version
+                SELECT *
+                FROM component_segment
+                WHERE UPPER(component_id)=%s
+                ORDER BY segment_id
                 """,
                 (component_id,)
             )
+            return cur.fetchall()
+
+    def list_component_doc_versions(
+            self,
+            component_id: str,
+            segment_id: str | None = ""
+    ) -> list[str]:
+        component_id = normalize_identifier(component_id)
+        if segment_id is not None:
+            segment_id = normalize_identifier(segment_id)
+        with self.conn.cursor() as cur:
+            if segment_id is None:
+                cur.execute(
+                    """
+                    SELECT DISTINCT doc_version
+                    FROM component_doc_version
+                    WHERE UPPER(component_id)=%s
+                    ORDER BY doc_version
+                    """,
+                    (component_id,)
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT doc_version
+                    FROM component_doc_version
+                    WHERE UPPER(component_id)=%s
+                    AND UPPER(segment_id)=%s
+                    ORDER BY doc_version
+                    """,
+                    (
+                        component_id,
+                        segment_id or ""
+                    )
+                )
             return [
                 row[0]
                 for row in cur.fetchall()
             ]
 
+    def list_component_doc_version_rows(
+            self,
+            component_id: str,
+            segment_id: str | None = None
+    ):
+        component_id = normalize_identifier(component_id)
+        if segment_id is not None:
+            segment_id = normalize_identifier(segment_id)
+        with self.conn.cursor(
+                cursor_factory=RealDictCursor
+        ) as cur:
+            if segment_id is None:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM component_doc_version
+                    WHERE UPPER(component_id)=%s
+                    ORDER BY segment_id, doc_version
+                    """,
+                    (component_id,)
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM component_doc_version
+                    WHERE UPPER(component_id)=%s
+                    AND UPPER(segment_id)=%s
+                    ORDER BY doc_version
+                    """,
+                    (
+                        component_id,
+                        segment_id or ""
+                    )
+                )
+            return cur.fetchall()
+
     def get_component_doc_mapping(
             self,
             component_id: str,
-            component_version: str
+            component_version: str,
+            segment_id: str = ""
     ):
+        component_id = normalize_identifier(component_id)
+        segment_id = normalize_identifier(segment_id)
         with self.conn.cursor(
                 cursor_factory=RealDictCursor
         ) as cur:
@@ -478,11 +649,13 @@ class DesignRepository:
                 """
                 SELECT *
                 FROM component_version_doc_mapping
-                WHERE component_id=%s
+                WHERE UPPER(component_id)=%s
+                AND UPPER(segment_id)=%s
                 AND component_version=%s
                 """,
                 (
                     component_id,
+                    segment_id or "",
                     component_version
                 )
             )
@@ -493,6 +666,7 @@ class DesignRepository:
         return ApiIdentity(
             id=row["id"],
             component_id=row["component_id"],
+            segment_id=row.get("segment_id", ""),
             method=row["method"],
             api_path=row["api_path"],
             api_name=row["api_name"],
@@ -522,25 +696,49 @@ class DesignRepository:
             self,
             component_id: str,
             method: str,
-            api_path: str
+            api_path: str,
+            segment_id: str | None = ""
     ):
+        component_id = normalize_identifier(component_id)
+        if segment_id is not None:
+            segment_id = normalize_identifier(segment_id)
         with self.conn.cursor(
                 cursor_factory=RealDictCursor
         ) as cur:
-            cur.execute(
-                """
-                SELECT *
-                FROM api_identity
-                WHERE component_id=%s
-                AND method=%s
-                AND api_path=%s
-                """,
-                (
-                    component_id,
-                    method.upper(),
-                    api_path
+            if segment_id is None:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM api_identity
+                    WHERE UPPER(component_id)=%s
+                    AND method=%s
+                    AND api_path=%s
+                    ORDER BY segment_id
+                    LIMIT 1
+                    """,
+                    (
+                        component_id,
+                        method.upper(),
+                        api_path
+                    )
                 )
-            )
+            else:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM api_identity
+                    WHERE UPPER(component_id)=%s
+                    AND UPPER(segment_id)=%s
+                    AND method=%s
+                    AND api_path=%s
+                    """,
+                    (
+                        component_id,
+                        segment_id or "",
+                        method.upper(),
+                        api_path
+                    )
+                )
             row = cur.fetchone()
         return (
             self._to_api_identity(row)
@@ -556,6 +754,10 @@ class DesignRepository:
     ) -> list[ApiIdentity]:
         if not ids or not component_ids:
             return []
+        component_ids = [
+            normalize_identifier(component_id)
+            for component_id in component_ids
+        ]
 
         with self.conn.cursor(
                 cursor_factory=RealDictCursor
@@ -565,7 +767,7 @@ class DesignRepository:
                 SELECT *
                 FROM api_identity
                 WHERE id = ANY(%s)
-                AND component_id = ANY(%s)
+                AND UPPER(component_id) = ANY(%s)
                 LIMIT %s
                 """,
                 (
@@ -588,6 +790,10 @@ class DesignRepository:
     ) -> list[ApiIdentity]:
         if not keyword or not component_ids:
             return []
+        component_ids = [
+            normalize_identifier(component_id)
+            for component_id in component_ids
+        ]
 
         keyword_param = f"%{keyword}%"
 
@@ -598,7 +804,7 @@ class DesignRepository:
                 """
                 SELECT *
                 FROM api_identity
-                WHERE component_id = ANY(%s)
+                WHERE UPPER(component_id) = ANY(%s)
                 AND (
                     api_name ILIKE %s
                     OR api_path ILIKE %s
@@ -735,20 +941,39 @@ class DesignRepository:
 
     def list_api_identities_for_component(
             self,
-            component_id: str
+            component_id: str,
+            segment_id: str | None = None
     ) -> list[ApiIdentity]:
+        component_id = normalize_identifier(component_id)
+        if segment_id is not None:
+            segment_id = normalize_identifier(segment_id)
         with self.conn.cursor(
                 cursor_factory=RealDictCursor
         ) as cur:
-            cur.execute(
-                """
-                SELECT *
-                FROM api_identity
-                WHERE component_id=%s
-                ORDER BY method, api_path
-                """,
-                (component_id,)
-            )
+            if segment_id is None:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM api_identity
+                    WHERE UPPER(component_id)=%s
+                    ORDER BY segment_id, method, api_path
+                    """,
+                    (component_id,)
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM api_identity
+                    WHERE UPPER(component_id)=%s
+                    AND UPPER(segment_id)=%s
+                    ORDER BY method, api_path
+                    """,
+                    (
+                        component_id,
+                        segment_id or ""
+                    )
+                )
             rows = cur.fetchall()
 
         return [
@@ -810,6 +1035,7 @@ class DesignRepository:
                 SELECT
                     ai.id AS identity_id,
                     ai.component_id,
+                    ai.segment_id,
                     ai.method,
                     ai.api_path,
                     ai.api_name,
@@ -838,6 +1064,7 @@ class DesignRepository:
                 "identity": ApiIdentity(
                     id=row["identity_id"],
                     component_id=row["component_id"],
+                    segment_id=row.get("segment_id", ""),
                     method=row["method"],
                     api_path=row["api_path"],
                     api_name=row["api_name"],

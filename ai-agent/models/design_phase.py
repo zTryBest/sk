@@ -18,6 +18,19 @@ class ComponentCatalog:
 
 
 @dataclass
+class ComponentSegment:
+    component_id: str
+    segment_id: str
+    segment_name: str
+    description: str = ""
+    scene: str = ""
+    id: int | None = None
+
+    def to_dict(self):
+        return self.__dict__
+
+
+@dataclass
 class ProductComponentBaseline:
     product_id: str
     product_version: str
@@ -34,6 +47,7 @@ class ProductComponentBaseline:
 class ComponentDocVersion:
     component_id: str
     doc_version: str
+    segment_id: str = ""
     doc_url: str = ""
     crawl_status: str = "PENDING"
     id: int | None = None
@@ -49,6 +63,7 @@ class ApiIdentity:
     api_path: str
     api_name: str
     capability_tags: list[str]
+    segment_id: str = ""
     scene: str = ""
     description: str = ""
     id: int | None = None

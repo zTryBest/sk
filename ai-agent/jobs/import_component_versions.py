@@ -10,6 +10,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from jobs.import_swagger import import_swagger  # noqa: E402
+from utils.identifier_utils import normalize_identifier  # noqa: E402
 from utils.version_utils import sort_versions  # noqa: E402
 
 
@@ -37,6 +38,10 @@ def parse_version_file(value: str) -> tuple[str, str]:
 def import_component_versions(
         component_id: str,
         version_files: list[tuple[str, str]],
+        segment_id: str = "",
+        segment_name: str = "",
+        segment_description: str = "",
+        segment_scene: str = "",
         component_name: str = "",
         component_description: str = "",
         component_scene: str = "",
@@ -47,8 +52,14 @@ def import_component_versions(
         product_description: str = "",
         component_version: str = "",
         enrichment_file: str | None = None,
+        path_prefix: str | None = None,
+        allow_unbound: bool = False,
         rebuild_index: bool = False
 ):
+    component_id = normalize_identifier(component_id)
+    segment_id = normalize_identifier(segment_id)
+    product_id = normalize_identifier(product_id)
+
     version_file_map = {
         doc_version: swagger_file
         for doc_version, swagger_file in version_files
@@ -69,6 +80,10 @@ def import_component_versions(
             component_id=component_id,
             doc_version=doc_version,
             swagger_file=version_file_map[doc_version],
+            segment_id=segment_id,
+            segment_name=segment_name,
+            segment_description=segment_description,
+            segment_scene=segment_scene,
             component_name=component_name,
             component_description=component_description,
             component_scene=component_scene,
@@ -79,6 +94,8 @@ def import_component_versions(
             product_description=product_description,
             component_version=component_version,
             enrichment_file=enrichment_file,
+            path_prefix=path_prefix,
+            allow_unbound=allow_unbound,
             rebuild_index=False
         )
         summaries.append({
@@ -94,6 +111,7 @@ def import_component_versions(
 
     return {
         "component_id": component_id,
+        "segment_id": segment_id,
         "imported_versions": summaries,
         "count": len(summaries),
         "vector_index_rebuilt": rebuild_index
@@ -108,6 +126,18 @@ def main():
         )
     )
     parser.add_argument("--component-id", required=True)
+    parser.add_argument("--segment-id", default="")
+    parser.add_argument("--segment-name", default="")
+    parser.add_argument("--segment-description", default="")
+    parser.add_argument("--segment-scene", default="")
+    parser.add_argument(
+        "--path-prefix",
+        default=None,
+        help=(
+            "Override Swagger basePath/OpenAPI servers path for all imported files. "
+            "Use an empty string to disable automatic prefixing."
+        )
+    )
     parser.add_argument(
         "--version",
         action="append",
@@ -126,6 +156,14 @@ def main():
     parser.add_argument("--component-version", default="")
     parser.add_argument("--enrichment-file", default=None)
     parser.add_argument(
+        "--allow-unbound",
+        action="store_true",
+        help=(
+            "Allow importing component/API docs without product baseline binding. "
+            "Use only for experiments; MCP requirement lookup needs product binding."
+        )
+    )
+    parser.add_argument(
         "--rebuild-index",
         action="store_true",
         help="Rebuild the API identity vector index after all versions are imported."
@@ -135,6 +173,10 @@ def main():
     result = import_component_versions(
         component_id=args.component_id,
         version_files=args.version,
+        segment_id=args.segment_id,
+        segment_name=args.segment_name,
+        segment_description=args.segment_description,
+        segment_scene=args.segment_scene,
         component_name=args.component_name,
         component_description=args.component_description,
         component_scene=args.component_scene,
@@ -145,6 +187,8 @@ def main():
         product_description=args.product_description,
         component_version=args.component_version,
         enrichment_file=args.enrichment_file,
+        path_prefix=args.path_prefix,
+        allow_unbound=args.allow_unbound,
         rebuild_index=args.rebuild_index
     )
 

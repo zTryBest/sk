@@ -154,6 +154,7 @@ def run_once(
                 product_id="",
                 product_version="",
                 component_id=identity.component_id,
+                segment_id=identity.segment_id,
                 component_version="",
                 test_env=base_url,
                 request_url=request_url,
