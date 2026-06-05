@@ -110,7 +110,9 @@ worker 模式规则：
 - 每个问题必须有稳定 `id`；同一个问题重试时复用同一个 `id`，方便主流程去重和续跑。
 - worker 模式下也不能隐藏 MCP 过程；MCP 搜索计划、调用日志、候选淘汰原因仍必须落入 `design-handoff.json`。
 - 阶段完成时写 `worker-result.json(status=STAGE_COMPLETED)`，包含 `artifact_dir`、`handoff`、`validation` 和简短 `summary`。
-- 校验失败且 worker 能修复时先修复一次；仍失败则写 `worker-result.json(status=VALIDATION_FAILED)`，不要进入原型、编码或自测阶段。
+- 校验失败时先判断错误类型：如果涉及 `UNDECIDED`、`待确认`、架构/中间件选择、MCP 检索计划确认、候选 API 选择、数据库类型、风险处理等需要用户决策的问题，禁止自行替换为确定结论，必须写 `pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)` 后停止。
+- 只有纯文档结构、字段漏写但不需要新业务事实的问题，才允许 worker 基于已确认事实自行补充并重新运行 validator；仍失败则写 `worker-result.json(status=VALIDATION_FAILED)`。
+- worker 模式下不要询问“是否继续进入原型/编码/自测”。设计阶段完成且 `design-validation.json.success=true` 时，直接写 `worker-result.json(status=STAGE_COMPLETED)`，由 orchestrator 自动流转。
 
 `pending-questions.json` 格式：
 

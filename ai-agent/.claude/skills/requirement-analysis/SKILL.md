@@ -36,7 +36,9 @@ worker 模式规则：
 - 如果 `decisions.jsonl` 已经包含对应 `question_id` 的用户决策，使用该决策继续执行，并把证据级别标为 `澄清`。
 - 每个问题必须有稳定 `id`；同一个问题重试时复用同一个 `id`，方便主流程去重和续跑。
 - 阶段完成时写 `worker-result.json(status=STAGE_COMPLETED)`，包含 `artifact_dir`、`handoff`、`validation` 和简短 `summary`。
-- 校验失败且 worker 能修复时先修复一次；仍失败则写 `worker-result.json(status=VALIDATION_FAILED)`，不要进入 design-phase。
+- 校验失败时先判断错误类型：如果涉及 `[待确认]`、`待确认`、`open_questions`、目标对象来源未确认、产品/版本缺失或任何需要用户确认的新事实，禁止自行替换为确定结论，必须写 `pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)` 后停止。
+- 只有纯文档结构、验收标准数量不足、字段遗漏但不需要新业务事实的问题，才允许 worker 基于已知需求自行补充并重新运行 validator；仍失败则写 `worker-result.json(status=VALIDATION_FAILED)`。
+- worker 模式下不要询问“是否继续进入 design-phase”。需求分析完成且 `requirement-validation.json.success=true` 时，直接写 `worker-result.json(status=STAGE_COMPLETED)`，由 orchestrator 自动流转。
 
 `pending-questions.json` 格式：
 
@@ -280,7 +282,12 @@ worker 模式规则：
 python .claude/skills/requirement-analysis/scripts/validate_requirement.py --handoff <交接目录>/requirement-handoff.json --output <交接目录>/requirement-validation.json --project-root <项目根目录>
 ```
 
-校验失败时，读取 `requirement-validation.json` 的 `errors`，修复文档和 JSON 后重新运行。不能在校验失败时声明需求分析完成，也不能进入 design-phase。
+校验失败时，读取 `requirement-validation.json` 的 `errors` 后先分类处理：
+
+- 如果错误涉及 `[待确认]`、`待确认`、`open_questions`、目标对象来源未确认、产品/版本缺失或任何需要用户确认的新事实，不能擅自替换或删除这些字段；必须回到澄清阶段。worker 模式下写 `pending-questions.json` 并停止，直连人工模式下使用 `AskQuestion`。
+- 如果错误只是验收标准数量不足、章节缺失、字段漏写等不需要新增业务事实的问题，可以基于已知事实补充后重新运行 validator。
+
+不能在校验失败时声明需求分析完成，也不能进入 design-phase。
 
 ## 输入模式
 
