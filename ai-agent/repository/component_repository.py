@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 
 from typing import List, Optional
-import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from config.config import POSTGRES_CONFIG
 from models.component import ComponentInfo
+from repository.postgres_connection import ResilientPostgresConnection
 
 import logging
 
@@ -18,8 +17,8 @@ class ComponentRepository:
 
         logger.info("初始化 ComponentRepository")
 
-        self.conn = psycopg2.connect(
-            **POSTGRES_CONFIG
+        self.conn = ResilientPostgresConnection(
+            name=self.__class__.__name__
         )
 
     # =====================================

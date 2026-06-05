@@ -3,11 +3,10 @@
 import logging
 from typing import List, Optional
 
-import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from config.config import POSTGRES_CONFIG
 from models.requirement_api_feedback import RequirementApiFeedback
+from repository.postgres_connection import ResilientPostgresConnection
 
 
 logger = logging.getLogger(__name__)
@@ -18,8 +17,8 @@ class RequirementApiFeedbackRepository:
     def __init__(self):
         logger.info("初始化 RequirementApiFeedbackRepository")
 
-        self.conn = psycopg2.connect(
-            **POSTGRES_CONFIG
+        self.conn = ResilientPostgresConnection(
+            name=self.__class__.__name__
         )
 
     @staticmethod

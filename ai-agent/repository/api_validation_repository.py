@@ -2,11 +2,10 @@
 
 import logging
 
-import psycopg2
 from psycopg2.extras import Json
 
-from config.config import POSTGRES_CONFIG
 from models.api_validation import ApiValidationRecord
+from repository.postgres_connection import ResilientPostgresConnection
 
 
 logger = logging.getLogger(__name__)
@@ -17,8 +16,8 @@ class ApiValidationRepository:
     def __init__(self):
         logger.info("初始化 ApiValidationRepository")
 
-        self.conn = psycopg2.connect(
-            **POSTGRES_CONFIG
+        self.conn = ResilientPostgresConnection(
+            name=self.__class__.__name__
         )
 
     def save(self, record: ApiValidationRecord) -> int:

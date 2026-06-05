@@ -4,10 +4,8 @@ import hashlib
 import json
 import logging
 
-import psycopg2
 from psycopg2.extras import Json, RealDictCursor
 
-from config.config import POSTGRES_CONFIG
 from models.design_phase import (
     ApiContract,
     ApiIdentity,
@@ -16,6 +14,7 @@ from models.design_phase import (
     ComponentSegment,
     ProductComponentBaseline,
 )
+from repository.postgres_connection import ResilientPostgresConnection
 from utils.identifier_utils import normalize_identifier
 
 
@@ -26,9 +25,12 @@ class DesignRepository:
 
     def __init__(self):
         logger.info("初始化 DesignRepository")
-        self.conn = psycopg2.connect(
-            **POSTGRES_CONFIG
+        self.conn = ResilientPostgresConnection(
+            name=self.__class__.__name__
         )
+
+    def ping(self):
+        return self.conn.ping()
 
     @staticmethod
     def _api_identity_content(api: ApiIdentity) -> str:

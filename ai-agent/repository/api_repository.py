@@ -4,11 +4,10 @@ import json
 import logging
 from typing import List, Optional
 
-import psycopg2
 from psycopg2.extras import Json, RealDictCursor
 
-from config.config import POSTGRES_CONFIG
 from models.api import ApiInfo
+from repository.postgres_connection import ResilientPostgresConnection
 
 
 logger = logging.getLogger(__name__)
@@ -20,8 +19,8 @@ class ApiRepository:
 
         logger.info("初始化 ApiRepository")
 
-        self.conn = psycopg2.connect(
-            **POSTGRES_CONFIG
+        self.conn = ResilientPostgresConnection(
+            name=self.__class__.__name__
         )
 
     # =====================================

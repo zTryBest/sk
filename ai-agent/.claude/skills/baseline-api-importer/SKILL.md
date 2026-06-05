@@ -81,8 +81,10 @@ Swagger 经常缺少中文业务描述，尤其是请求字段、响应字段和
 - `business_terms`：业务词，例如“资源检索”“权限查询”
 - `search_keywords`：检索关键词，例如字段名、业务别名、英文缩写
 - `request_field_notes`：请求字段中文含义
+- `request_header_notes`：请求 Header 中文含义，例如 Token、userId、tenantId
 - `response_field_notes`：响应字段中文含义
 - `request_value_notes`：请求值说明
+- `request_header_value_notes`：请求 Header 值说明
 - `response_value_notes`：响应值说明
 - `usage_notes`：使用建议
 
@@ -148,7 +150,9 @@ python jobs\import_swagger.py `
 - 不要改变 operation key，例如 `GET /xxx/yyy`。
 - 不要编造不存在的接口路径和字段。
 - 字段名必须保留原始英文名，同时补中文含义。
-- 优先分析 `request_schema`、`response_schema`、`request_field_candidates`、`response_field_candidates`。
+- 优先分析 `request_schema`、`response_schema`、`request_field_candidates`、`request_header_candidates`、`response_field_candidates`。
+- 必须区分业务请求参数和 Header。`Token`、`Authorization`、`userId`、`tenantId` 等 Header 通常是认证/上下文信息，不要当作接口业务入参来生成接口描述和业务场景。
+- 全局统一必传的技术 Header 不应写入 enrichment 或接口语义上下文。导入脚本默认过滤 `Token`、`Authorization`、`accessToken` 等 Header。若项目还有其他全局 Header，可设置 `SWAGGER_IGNORED_REQUEST_HEADERS=Token,Authorization,userId,tenantId`。
 - 用请求参数和响应参数反推 `api_name`、`description`、`scene`、`business_terms` 和 `search_keywords`。
 - 对没有中文描述的返回字段，优先根据字段名、接口名、上下文推断，并在 `usage_notes` 标注“根据字段名推断”。
 - 如果请求参数或响应参数不明确，降低 `contract_confidence`，并在 `confidence_reason` 中说明原因。

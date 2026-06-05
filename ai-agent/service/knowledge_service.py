@@ -612,8 +612,11 @@ class KnowledgeService:
         }
 
     def health_check(self):
+        self.design_repo.ping()
+
         return {
             "status": "ok",
             "message": "KnowledgeService is running",
-            "model": "api_identity_contract"
+            "model": "api_identity_contract",
+            "database": "ok"
         }

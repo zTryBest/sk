@@ -3,6 +3,7 @@
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,17 @@ HTTP_METHODS = {
 }
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_IGNORED_REQUEST_HEADERS = {
+    "authorization",
+    "token",
+    "access-token",
+    "access_token",
+    "accesstoken",
+    "x-access-token",
+    "x-auth-token",
+    "bearer",
+}
 
 
 def load_json(path: str) -> dict[str, Any]:
@@ -202,6 +214,14 @@ def compact_schema(schema: Any):
             "enum",
             "default",
             "example",
+            "maximum",
+            "minimum",
+            "maxLength",
+            "minLength",
+            "pattern",
+            "maxItems",
+            "minItems",
+            "collectionFormat",
             "nullable",
             "circular_ref"
     ):
@@ -273,7 +293,20 @@ def collect_schema_fields(
                 "description": node.get("description", ""),
                 "format": node.get("format", ""),
                 "enum": node.get("enum", []),
-                "example": node.get("example", "")
+                "example": node.get("example", ""),
+                "constraints": {
+                    key: node[key]
+                    for key in (
+                        "maximum",
+                        "minimum",
+                        "maxLength",
+                        "minLength",
+                        "pattern",
+                        "maxItems",
+                        "minItems"
+                    )
+                    if key in node
+                }
             })
 
         if "properties" in node:
@@ -323,15 +356,16 @@ def collect_schema_fields(
 
 def collect_request_fields(
         request_schema: dict[str, Any],
+        sections: tuple[str, ...] = (
+            "path",
+            "query"
+        ),
+        include_body: bool = True,
         limit: int = 200
 ) -> list[dict[str, Any]]:
     fields = []
 
-    for section in (
-            "path",
-            "query",
-            "header"
-    ):
+    for section in sections:
         for name, meta in (request_schema.get(section) or {}).items():
             schema = meta.get("schema") or {}
             fields.append({
@@ -353,6 +387,23 @@ def collect_request_fields(
                     schema.get("example", "")
                     if isinstance(schema, dict)
                     else ""
+                ),
+                "constraints": (
+                    {
+                        key: schema[key]
+                        for key in (
+                            "maximum",
+                            "minimum",
+                            "maxLength",
+                            "minLength",
+                            "pattern",
+                            "maxItems",
+                            "minItems"
+                        )
+                        if key in schema
+                    }
+                    if isinstance(schema, dict)
+                    else {}
                 )
             })
             if len(fields) >= limit:
@@ -371,15 +422,49 @@ def collect_request_fields(
             if len(fields) >= limit:
                 return fields
 
-    body_schema = request_schema.get("body") or {}
-    fields.extend(
-        collect_schema_fields(
+    if include_body:
+        body_schema = request_schema.get("body") or {}
+        body_meta = request_schema.get("body_meta") or {}
+        body_name = body_meta.get("name", "")
+        body_prefix = (
+            f"body.{body_name}"
+            if body_name and body_name != "body"
+            else "body"
+        )
+        if body_meta:
+            fields.append({
+                "path": body_prefix,
+                "type": schema_type_name(body_schema),
+                "required": bool(body_meta.get("required")),
+                "description": body_meta.get("description", ""),
+                "format": "",
+                "enum": [],
+                "example": "",
+                "constraints": {}
+            })
+        nested_body_fields = collect_schema_fields(
             body_schema,
-            prefix="body",
+            prefix=body_prefix,
             limit=limit - len(fields)
         )
-    )
+        if body_meta and nested_body_fields:
+            nested_body_fields = nested_body_fields[1:]
+        fields.extend(
+            nested_body_fields
+        )
     return fields[:limit]
+
+
+def collect_request_header_fields(
+        request_schema: dict[str, Any],
+        limit: int = 100
+) -> list[dict[str, Any]]:
+    return collect_request_fields(
+        request_schema=request_schema,
+        sections=("header",),
+        include_body=False,
+        limit=limit
+    )
 
 
 def has_unresolved_ref(schema: Any) -> bool:
@@ -472,6 +557,35 @@ def field_note_seed(fields: list[dict[str, Any]]) -> dict[str, str]:
     }
 
 
+def ignored_request_headers() -> set[str]:
+    configured = os.getenv(
+        "SWAGGER_IGNORED_REQUEST_HEADERS",
+        ""
+    )
+    if not configured:
+        return set(
+            DEFAULT_IGNORED_REQUEST_HEADERS
+        )
+    return {
+        item.strip().lower()
+        for item in configured.split(",")
+        if item.strip()
+    }
+
+
+def is_ignored_request_header(
+        name: str,
+        ignored_headers: set[str] | None = None
+) -> bool:
+    ignored_headers = (
+        ignored_headers
+        if ignored_headers is not None
+        else ignored_request_headers()
+    )
+    normalized = (name or "").strip().lower()
+    return normalized in ignored_headers
+
+
 def merge_parameters(
         path_item: dict[str, Any],
         operation: dict[str, Any]
@@ -479,6 +593,34 @@ def merge_parameters(
     return list(path_item.get("parameters") or []) + list(
         operation.get("parameters") or []
     )
+
+
+def scalar_parameter_schema(param: dict[str, Any]) -> dict[str, Any]:
+    schema = dict(
+        param.get("schema") or {}
+    )
+    if not schema:
+        schema["type"] = param.get("type", "string")
+
+    for key in (
+            "format",
+            "enum",
+            "default",
+            "example",
+            "maximum",
+            "minimum",
+            "maxLength",
+            "minLength",
+            "pattern",
+            "maxItems",
+            "minItems",
+            "collectionFormat",
+            "items"
+    ):
+        if key in param and key not in schema:
+            schema[key] = param[key]
+
+    return schema
 
 
 def schema_from_parameters(
@@ -489,9 +631,12 @@ def schema_from_parameters(
         "path": {},
         "query": {},
         "header": {},
-        "body": {}
+        "body": {},
+        "body_meta": {}
     }
     lines = []
+    header_lines = []
+    ignored_headers = ignored_request_headers()
 
     for param in parameters:
         name = param.get("name", "")
@@ -507,14 +652,29 @@ def schema_from_parameters(
                 )
             )
             result["body"] = schema
-            lines.append(
-                f"{name or 'body'}: {description}".strip()
-            )
+            result["body_meta"] = {
+                "name": name or "body",
+                "required": required,
+                "description": description
+            }
+            if description:
+                lines.append(
+                    f"body.{name or 'body'}: {description}".strip()
+                )
             continue
 
-        schema = param.get("schema") or {
-            "type": param.get("type", "string")
-        }
+        schema = scalar_parameter_schema(
+            param
+        )
+
+        if (
+                location == "header"
+                and is_ignored_request_header(
+                    name,
+                    ignored_headers
+                )
+        ):
+            continue
 
         if location in result:
             result[location][name] = {
@@ -526,11 +686,13 @@ def schema_from_parameters(
             }
 
         if name:
-            lines.append(
-                f"{name}: {description}".strip()
-            )
+            line = f"{location}.{name}: {description}".strip()
+            if location == "header":
+                header_lines.append(line)
+            else:
+                lines.append(line)
 
-    return result, "\n".join(lines)
+    return result, "\n".join(lines), "\n".join(header_lines)
 
 
 def request_body_from_openapi3(
@@ -719,7 +881,7 @@ def parse_operations(
                 path_item,
                 operation
             )
-            request_schema, params_desc = schema_from_parameters(
+            request_schema, params_desc, header_desc = schema_from_parameters(
                 swagger,
                 parameters
             )
@@ -757,9 +919,12 @@ def parse_operations(
                     "business_terms",
                     "search_keywords",
                     "request_field_notes",
+                    "request_header_notes",
                     "response_field_notes",
                     "request_value_notes",
+                    "request_header_value_notes",
                     "response_value_notes",
+                    "header_desc",
                     "contract_confidence",
                     "contract_quality",
                     "confidence_reason",
@@ -793,6 +958,9 @@ def parse_operations(
             request_fields = collect_request_fields(
                 request_schema_final
             )
+            request_header_fields = collect_request_header_fields(
+                request_schema_final
+            )
             response_fields = collect_schema_fields(
                 response_schema_final,
                 prefix="response"
@@ -819,8 +987,10 @@ def parse_operations(
                 "request_schema": request_schema_final,
                 "response_schema": response_schema_final,
                 "request_fields": request_fields,
+                "request_header_fields": request_header_fields,
                 "response_fields": response_fields,
                 "contract_quality": quality,
+                "header_desc": header_desc,
                 "request_headers": extra.get("request_headers", {}),
                 "request_example": extra.get("request_example", {}),
                 "response_example": extra.get("response_example", {}),
@@ -858,15 +1028,21 @@ def emit_enrichment_template(
                 "request_field_notes": field_note_seed(
                     item["request_fields"]
                 ),
+                "request_header_notes": field_note_seed(
+                    item["request_header_fields"]
+                ),
                 "response_field_notes": field_note_seed(
                     item["response_fields"]
                 ),
                 "request_value_notes": {},
+                "request_header_value_notes": {},
                 "response_value_notes": {},
                 "params_desc": item["params_desc"],
+                "header_desc": item["header_desc"],
                 "request_schema": item["request_schema"],
                 "response_schema": item["response_schema"],
                 "request_field_candidates": item["request_fields"],
+                "request_header_candidates": item["request_header_fields"],
                 "response_field_candidates": item["response_fields"],
                 "contract_quality": item["contract_quality"],
                 "contract_confidence": item["contract_quality"]["contract_confidence"],

@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 
 from typing import List, Optional
-import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from config.config import POSTGRES_CONFIG
 from models.candidate import KnowledgeCandidate
+from repository.postgres_connection import ResilientPostgresConnection
 
 import logging
 import json
@@ -19,8 +18,8 @@ class CandidateRepository:
 
         logger.info("初始化 CandidateRepository")
 
-        self.conn = psycopg2.connect(
-            **POSTGRES_CONFIG
+        self.conn = ResilientPostgresConnection(
+            name=self.__class__.__name__
         )
 
     # =====================================
