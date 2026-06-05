@@ -160,6 +160,8 @@ workflow_goal: {workflow_goal}
 2. 子 skill 的流程规则优先级高于本 orchestrator prompt；本 prompt 只覆盖“交互方式”和“worker-result 写法”。
 3. worker_mode 只把 AskQuestion 替换为 pending-questions.json，不改变子 skill 的抓取、分析、MCP、校验等规则。
 4. 如果无法读取子 skill，立即写 {result_path}，status=BLOCKED，summary 写明“子 skill 未加载”，然后停止。
+5. 这不是聊天问候任务。不要只回复“你好”“我可以帮你”等普通对话。必须实际执行阶段任务、读写文件，并最终写 worker-result.json。
+6. 标准输出可以很短，但文件产物是必需的；没有 worker-result.json 就视为本次 worker 失败。
 
 必须读取的运行文件：
 - workflow-state: {state_path}
@@ -296,8 +298,13 @@ def record_worker_result(state_path: Path, result_path: Path) -> dict[str, Any]:
     artifact_dir = Path(result.get("artifact_dir") or state["artifact_dir"]).resolve()
     if artifact_dir != Path(state["artifact_dir"]).resolve():
         old_state_path = state_path
+        old_artifact_dir = Path(state["artifact_dir"]).resolve()
+        old_decisions_path = old_artifact_dir / state.get("decisions_log", "decisions.jsonl")
+        new_decisions_path = artifact_dir / state.get("decisions_log", "decisions.jsonl")
         state["artifact_dir"] = str(artifact_dir)
         artifact_dir.mkdir(parents=True, exist_ok=True)
+        if old_decisions_path.exists() and not new_decisions_path.exists():
+            new_decisions_path.write_text(old_decisions_path.read_text(encoding="utf-8"), encoding="utf-8")
         state_path = artifact_dir / "workflow-state.json"
         if not state_path.exists():
             write_json(state_path, state)
@@ -432,6 +439,7 @@ def build_worker_metrics(
     started_at: str,
     ended_at: str,
     duration_seconds: float,
+    stdout_classification: str,
 ) -> dict[str, Any]:
     parsed = parse_cli_json_output(completed.stdout or "")
     result = parsed.get("result")
@@ -451,9 +459,11 @@ def build_worker_metrics(
         "duration_seconds": round(duration_seconds, 3),
         "returncode": completed.returncode,
         "command": cmd,
+        "prompt_delivery": "stdin",
         "prompt_path": str(prompt_path),
         "log_path": str(log_path),
         "stdout_json_parsed": parsed.get("parsed", False),
+        "stdout_classification": stdout_classification,
         "message_count": len(messages),
         "session_id": session_id,
         "num_turns": num_turns,
@@ -462,6 +472,29 @@ def build_worker_metrics(
         "raw_result_keys": sorted(result.keys()) if isinstance(result, dict) else [],
         "note": "Use /context inside an interactive Claude Code session for live context window usage; claude -p worker usage is captured here from CLI JSON when available.",
     }
+
+
+def classify_worker_stdout(stdout: str) -> str:
+    text = (stdout or "").strip()
+    if not text:
+        return "empty"
+    lowered = text.lower()
+    greeting_markers = ("你好", "您好", "hello", "hi", "我可以帮", "我能帮")
+    artifact_markers = (
+        "worker-result.json",
+        "pending-questions.json",
+        "requirement-handoff.json",
+        "design-handoff.json",
+        "STAGE_COMPLETED",
+        "NEED_USER_INPUT",
+        "VALIDATION_FAILED",
+        "BLOCKED",
+    )
+    if len(text) < 200 and any(marker in lowered for marker in greeting_markers):
+        return "likely_greeting_only"
+    if any(marker.lower() in lowered for marker in artifact_markers):
+        return "mentions_artifacts"
+    return "unknown"
 
 
 def run_worker_once(
@@ -474,23 +507,28 @@ def run_worker_once(
     state = load_state(state_path)
     artifact_dir = Path(state["artifact_dir"])
     prompt_path = artifact_dir / "worker-prompt.md"
-    if not prompt_path.exists():
-        prompt = make_worker_prompt(state)
-        prompt_path.write_text(prompt, encoding="utf-8")
+    prompt = make_worker_prompt(state)
+    prompt_path.write_text(prompt, encoding="utf-8")
 
     claude = shutil.which("claude")
     if not claude:
         raise SystemExit("claude CLI not found; run the prompt command and execute worker-prompt.md with an isolated worker manually")
 
-    prompt = prompt_path.read_text(encoding="utf-8")
-    cmd = [claude, "-p", prompt, "--output-format", output_format, "--max-turns", str(max_turns)]
+    cmd = [claude, "-p", "--input-format", "text", "--output-format", output_format, "--max-turns", str(max_turns)]
     started_at = now_iso()
     started_monotonic = time.monotonic()
-    completed = subprocess.run(cmd, cwd=state["project_root"], text=True, capture_output=True)
+    completed = subprocess.run(
+        cmd,
+        cwd=state["project_root"],
+        input=prompt,
+        text=True,
+        capture_output=True,
+    )
     ended_at = now_iso()
     duration_seconds = time.monotonic() - started_monotonic
     log_path = artifact_dir / "worker-cli-output.log"
     log_path.write_text((completed.stdout or "") + ("\nSTDERR:\n" + completed.stderr if completed.stderr else ""), encoding="utf-8")
+    stdout_classification = classify_worker_stdout(completed.stdout or "")
     metrics = build_worker_metrics(
         cmd=cmd,
         prompt_path=prompt_path,
@@ -499,10 +537,11 @@ def run_worker_once(
         started_at=started_at,
         ended_at=ended_at,
         duration_seconds=duration_seconds,
+        stdout_classification=stdout_classification,
     )
     metrics_path = artifact_dir / "worker-run-metrics.json"
     write_json(metrics_path, metrics)
-    add_history(state, "worker_cli_run", {"returncode": completed.returncode, "log": str(log_path), "metrics": str(metrics_path)})
+    add_history(state, "worker_cli_run", {"returncode": completed.returncode, "log": str(log_path), "metrics": str(metrics_path), "stdout_classification": stdout_classification})
     save_state(state_path, state)
     return {
         "returncode": completed.returncode,
@@ -510,6 +549,7 @@ def run_worker_once(
         "metrics": str(metrics_path),
         "artifact_dir": str(artifact_dir),
         "worker_result": str(artifact_dir / "worker-result.json"),
+        "stdout_classification": stdout_classification,
     }
 
 
@@ -542,6 +582,10 @@ def command_step(args: argparse.Namespace) -> int:
     )
     result_path = Path(run_summary["worker_result"])
     if not result_path.exists():
+        state = load_state(state_path)
+        state["stage_status"] = "BLOCKED"
+        add_history(state, "worker_result_missing", {"run": run_summary})
+        save_state(state_path, state)
         print(json.dumps({
             "run": run_summary,
             "state": str(state_path),
@@ -576,6 +620,10 @@ def command_run_loop(args: argparse.Namespace) -> int:
         )
         result_path = Path(run_summary["worker_result"])
         if not result_path.exists():
+            state = load_state(state_path)
+            state["stage_status"] = "BLOCKED"
+            add_history(state, "worker_result_missing", {"run": run_summary})
+            save_state(state_path, state)
             steps.append({
                 "run": run_summary,
                 "message": "worker finished but worker-result.json was not created",
