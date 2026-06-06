@@ -13,7 +13,8 @@
 - 遇到缺少平台名称/版本、关键澄清点、输出路径确认等人工确认点，先写 `worker-checkpoint.json`，再写 `pending-questions.json`，再写 `worker-result.json(status=NEED_USER_INPUT)`，然后停止。
 - 如果 `decisions.jsonl` 已经包含对应 `question_id` 的用户决策，使用该决策继续执行，并把证据级别标为 `澄清`。
 - 每个问题必须有稳定 `id`；同一个问题重试时复用同一个 `id`。
-- 遇到 SSO 登录、人机验证、文件选择、附件下载、访问外部系统或长时间人工处理，写 `external-action.json` 和 checkpoint，再写 pending/result 后停止；恢复后读取 `external-result.json` 并从 checkpoint 继续。
+- 遇到 SSO 时先按 `input-fetching.md` 尝试 worker 内自动登录；只有缺少配置、MCP/浏览器不可用、自动登录失败或需要人机验证时，才写 `external-action.json` 和 checkpoint，再写 pending/result 后停止。
+- 遇到文件选择、附件下载、访问外部系统或长时间人工处理，写 `external-action.json` 和 checkpoint，再写 pending/result 后停止；恢复后读取 `external-result.json` 并从 checkpoint 继续。
 - 阶段完成时写 `worker-result.json(status=STAGE_COMPLETED)`，包含 `artifact_dir`、`handoff`、`validation` 和简短 `summary`。
 - 校验失败时先分类：需要用户确认的新事实必须转 pending；纯文档结构或字段遗漏可以基于已知事实补齐并重跑 validator。
 - worker 模式下不要询问“是否继续进入 design-phase”。需求分析完成且 validator 成功时直接返回 `STAGE_COMPLETED`。

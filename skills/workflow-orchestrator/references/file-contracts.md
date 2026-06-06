@@ -53,6 +53,9 @@ external-result.json
   "decisions_log": "decisions.jsonl",
   "retry_count": 0,
   "max_retries": 2,
+  "max_missing_result_recoveries": 2,
+  "missing_result_recovery_count": 0,
+  "missing_result_recovery_repeat_count": 0,
   "auto_advance_stages": false,
   "full_auto": false,
   "auto_confirm_mode": "manual|ai",
@@ -245,7 +248,7 @@ worker 在任何 `NEED_USER_INPUT`、外部动作、validation retry 或阶段�
 
 ```json
 {
-  "status": "STAGE_COMPLETED|NEED_USER_INPUT|VALIDATION_FAILED|BLOCKED",
+  "status": "STAGE_COMPLETED|NEED_USER_INPUT|VALIDATION_FAILED|BLOCKED|RECOVERED_READY",
   "stage": "",
   "phase": "",
   "artifact_dir": "",
@@ -256,6 +259,8 @@ worker 在任何 `NEED_USER_INPUT`、外部动作、validation retry 或阶段�
   "next_action": ""
 }
 ```
+
+`RECOVERED_READY` 只由 orchestrator 在 worker 被截断、缺少正式 `worker-result.json`、但存在可恢复 checkpoint 时写入，用于审计恢复动作；它不是阶段完成状态。
 
 ## worker-run-metrics.json
 

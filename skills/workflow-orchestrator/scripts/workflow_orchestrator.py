@@ -54,6 +54,9 @@ DEFAULT_WORKER_ALLOWED_TOOLS = ",".join([
     "LS",
     "WebFetch",
     "WebSearch",
+    "mcp__playwright",
+    "mcp__browser",
+    "mcp__browser_use",
     "Bash(python *)",
     "Bash(py *)",
 ])
@@ -71,6 +74,8 @@ EXTERNAL_ACTION_REQUIRES_MAIN_SESSION = {
     "FILE_SELECTION",
     "EXTERNAL_SYSTEM_OPERATION",
 }
+
+DEFAULT_MAX_MISSING_RESULT_RECOVERIES = 2
 
 DEFAULT_WORKER_SUBAGENTS = {
     "workflow-requirement-researcher": {
@@ -148,6 +153,24 @@ def append_jsonl_all(path: Path, rows: list[dict[str, Any]]) -> None:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8-sig") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                rows.append(data)
+    return rows
+
+
 def copy_if_exists(src: Path, dest: Path) -> None:
     if src.exists() and not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -162,6 +185,10 @@ def resolve_project_root(value: str | None) -> Path:
 
 def bundled_skills_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def user_claude_config_dir() -> Path:
+    return Path.home() / ".claude" / "config"
 
 
 def resolve_stage_skill(project_root: Path, stage: str) -> Path:
@@ -198,6 +225,46 @@ def default_artifact_dir(project_root: Path, run_id: str) -> Path:
 
 def state_path_from_artifact(artifact_dir: Path) -> Path:
     return artifact_dir / "workflow-state.json"
+
+
+def last_state_pointer_path(project_root: Path | None = None) -> Path:
+    root = (project_root or Path.cwd()).resolve()
+    return root / ".claude" / "workflow-orchestrator-last-state.json"
+
+
+def write_last_state_pointer(project_root: Path, state_path: Path, artifact_dir: Path) -> None:
+    write_json(last_state_pointer_path(project_root), {
+        "schema_version": "1.0",
+        "state": str(state_path.resolve()),
+        "artifact_dir": str(artifact_dir.resolve()),
+        "updated_at": now_iso(),
+    })
+
+
+def resolve_state_path(value: str | None = None, artifact_dir: str | None = None) -> Path:
+    if value:
+        return Path(value).resolve()
+    if artifact_dir:
+        candidate = Path(artifact_dir).resolve()
+        if candidate.is_dir():
+            return candidate / "workflow-state.json"
+        return candidate.resolve()
+    cwd_candidate = Path.cwd() / "workflow-state.json"
+    if cwd_candidate.exists():
+        return cwd_candidate.resolve()
+    pointer = read_json(last_state_pointer_path(), {})
+    if isinstance(pointer, dict) and pointer.get("state"):
+        state_candidate = Path(str(pointer["state"])).resolve()
+        if state_candidate.exists():
+            return state_candidate
+    workflow_dirs = sorted(
+        (Path.cwd() / "requirements" / "_workflow").glob("*/workflow-state.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    ) if (Path.cwd() / "requirements" / "_workflow").exists() else []
+    if workflow_dirs:
+        return workflow_dirs[0].resolve()
+    raise SystemExit("workflow state is required. Pass --state <workflow-state.json> or --artifact-dir/--artifacts-dir <artifact dir>.")
 
 
 def build_initial_input(args: argparse.Namespace) -> dict[str, Any]:
@@ -380,7 +447,8 @@ artifact_dir: {artifact_dir}
 - source_type=ticket_url 或 sources 中有 ticket_url 时，按 requirement-analysis 的 Mode A 执行。
 - source_type=manual_text、document_file、goal_only 或只有自然语言需求时，按 requirement-analysis 的 Mode B 执行。
 - WebFetch 或轻量抓取失败、跳转 SSO、403、超时或内容为空时，必须自动切换到 Playwright MCP 或浏览器抓取；不要把轻量抓取失败当作阶段失败。
-- 只有需要用户完成 SSO 登录、缺少平台名称/版本、或存在关键澄清点时，才写 pending-questions.json。
+- 先读取 ~/.claude/config/internal-urls.yaml；如果 sso_username、sso_password、sso_selectors 和 Playwright/MCP 能力可用，必须在 worker 内自动登录，不要把 SSO 回传主流程。
+- 只有缺少 SSO 配置、MCP/浏览器不可用、自动登录失败、需要人机验证、缺少平台名称/版本、或存在关键澄清点时，才写 pending-questions.json。
 """
     elif stage == "design-phase":
         stage_specific_notes = """
@@ -433,9 +501,10 @@ workflow_goal: {workflow_goal}
 
 交互规则：
 - 不要直接向用户提问，不要调用 AskQuestion。
-- 如果需要人工确认，先写 worker-checkpoint.json，再写 {pending_path}，再写 {result_path}，status=NEED_USER_INPUT，然后停止。
+- 如果需要人工确认，先写 worker-checkpoint.json，再写 {pending_path}，立刻写 {result_path}，status=NEED_USER_INPUT，然后停止；禁止只写 pending-questions.json 而不写 worker-result.json。
+- 如果你已经写出了 pending-questions.json，但发现剩余工作还很多、上下文变长、或不能确信能在本次 worker 内完成，必须立即写 worker-result.json(status=NEED_USER_INPUT) 并退出，让 orchestrator 处理决策和续跑。
 - 如果 decisions_log 已经回答了当前确认点，使用该决策继续执行，并把证据写入阶段文档。
-- 如果遇到 SSO、人机验证、文件选择、外部系统操作、长时间人工处理或任何 worker 不能保留的有状态资源，不能依赖当前 worker 的浏览器、MCP 连接、临时进程或内存状态等待用户。写 worker-checkpoint.json、external-action.json 和 pending-questions.json，要求主流程完成外部动作并写 external-result.json；等 decisions_log 记录对应 resume_decision_id 后，读取 worker-checkpoint.json 和 external-result.json 断点继续。
+- 如果遇到无法在 worker 内自动完成的 SSO、人机验证、文件选择、外部系统操作、长时间人工处理或任何 worker 不能保留的有状态资源，不能依赖当前 worker 的浏览器、MCP 连接、临时进程或内存状态等待用户。写 worker-checkpoint.json、external-action.json 和 pending-questions.json，要求主流程完成外部动作并写 external-result.json；等 decisions_log 记录对应 resume_decision_id 后，读取 worker-checkpoint.json 和 external-result.json 断点继续。
 - worker 每次启动时都必须先检查 worker-checkpoint.json、external-result.json 和 decisions_log。如果存在已完成的外部动作或用户决策，必须从 checkpoint 恢复，不要从头重复已完成步骤。
 
 产物规则：
@@ -491,6 +560,9 @@ def command_init(args: argparse.Namespace) -> int:
         "decisions_log": "decisions.jsonl",
         "retry_count": 0,
         "max_retries": args.max_retries,
+        "max_missing_result_recoveries": args.max_missing_result_recoveries,
+        "missing_result_recovery_count": 0,
+        "missing_result_recovery_repeat_count": 0,
         "auto_advance_stages": bool(args.auto_advance),
         "full_auto": bool(args.full_auto),
         "auto_confirm_mode": "ai" if args.full_auto or args.auto_confirm else "manual",
@@ -507,6 +579,7 @@ def command_init(args: argparse.Namespace) -> int:
     add_history(state, "initialized", {"stage": args.stage, "input_source_type": initial_input["source_type"]})
     state_path = state_path_from_artifact(artifact_dir)
     write_json(state_path, state)
+    write_last_state_pointer(project_root, state_path, artifact_dir)
     (artifact_dir / "decisions.jsonl").touch(exist_ok=True)
     print(json.dumps({"state": str(state_path), "artifact_dir": str(artifact_dir)}, ensure_ascii=False, indent=2))
     return 0
@@ -1059,6 +1132,164 @@ def record_worker_result(state_path: Path, result_path: Path) -> dict[str, Any]:
     return {"state": str(state_path), "stage_status": state["stage_status"], "current_stage": state["current_stage"]}
 
 
+def pending_questions_answered(pending: dict[str, Any], decisions: list[dict[str, Any]]) -> bool:
+    batch_id = pending.get("question_batch_id")
+    questions = pending.get("questions") if isinstance(pending.get("questions"), list) else []
+    question_ids = {
+        str(question.get("id"))
+        for question in questions
+        if isinstance(question, dict) and question.get("id")
+    }
+    if not question_ids:
+        return False
+    answered = {
+        str(decision.get("question_id"))
+        for decision in decisions
+        if decision.get("question_id")
+        and (not batch_id or decision.get("question_batch_id") == batch_id)
+    }
+    return question_ids.issubset(answered)
+
+
+def recovery_signature(pending: dict[str, Any] | None, checkpoint: dict[str, Any] | None) -> str:
+    if isinstance(pending, dict) and pending.get("question_batch_id"):
+        return f"pending:{pending.get('question_batch_id')}"
+    if isinstance(checkpoint, dict) and checkpoint.get("checkpoint_id"):
+        return f"checkpoint:{checkpoint.get('checkpoint_id')}"
+    if isinstance(checkpoint, dict) and checkpoint.get("resume_from"):
+        return f"checkpoint:{checkpoint.get('stage', '')}:{checkpoint.get('phase', '')}:{checkpoint.get('resume_from')}"
+    return "missing-result:no-contract-files"
+
+
+def increment_recovery_guard(state: dict[str, Any], signature: str) -> tuple[bool, int]:
+    max_recoveries = int(state.get("max_missing_result_recoveries", DEFAULT_MAX_MISSING_RESULT_RECOVERIES))
+    previous = state.get("last_missing_result_recovery_signature")
+    count = int(state.get("missing_result_recovery_repeat_count", 0))
+    count = count + 1 if previous == signature else 1
+    state["last_missing_result_recovery_signature"] = signature
+    state["missing_result_recovery_repeat_count"] = count
+    state["missing_result_recovery_count"] = int(state.get("missing_result_recovery_count", 0)) + 1
+    return count <= max_recoveries, count
+
+
+def recover_missing_worker_result(state_path: Path, run_summary: dict[str, Any]) -> dict[str, Any]:
+    state_path = state_path.resolve()
+    state = load_state(state_path)
+    artifact_dir = Path(state["artifact_dir"])
+    pending_path = artifact_dir / "pending-questions.json"
+    checkpoint_path = artifact_dir / "worker-checkpoint.json"
+    result_path = artifact_dir / "worker-result.json"
+    pending = read_json(pending_path, {})
+    checkpoint = read_json(checkpoint_path, {})
+    pending = pending if isinstance(pending, dict) else {}
+    checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
+    signature = recovery_signature(pending, checkpoint)
+    allowed, repeat_count = increment_recovery_guard(state, signature)
+    if not allowed:
+        state["stage_status"] = "BLOCKED"
+        add_history(state, "missing_worker_result_recovery_limit_reached", {
+            "signature": signature,
+            "repeat_count": repeat_count,
+            "run": run_summary,
+        })
+        save_state(state_path, state)
+        return {
+            "recovered": False,
+            "state": str(state_path),
+            "stage_status": "BLOCKED",
+            "reason": "missing worker-result recovery limit reached",
+            "signature": signature,
+            "repeat_count": repeat_count,
+        }
+
+    decisions = read_jsonl(artifact_dir / state.get("decisions_log", "decisions.jsonl"))
+    if pending.get("status") == "NEED_USER_INPUT" and pending.get("questions"):
+        answered = pending_questions_answered(pending, decisions)
+        if answered and checkpoint:
+            state["stage_status"] = "READY"
+            state["current_phase"] = str(checkpoint.get("phase") or state.get("current_phase", ""))
+            state["pending_questions"] = ""
+            reason = "pending questions already answered; resume from checkpoint"
+        else:
+            state["stage_status"] = "NEED_USER_INPUT"
+            state["current_phase"] = str(pending.get("phase") or state.get("current_phase", ""))
+            state["pending_questions"] = str(pending_path)
+            reason = "pending questions found without worker-result; recovered to NEED_USER_INPUT"
+        synthetic = {
+            "status": "NEED_USER_INPUT" if state["stage_status"] == "NEED_USER_INPUT" else "RECOVERED_READY",
+            "stage": state.get("current_stage", ""),
+            "phase": state.get("current_phase", ""),
+            "artifact_dir": str(artifact_dir),
+            "handoff": state.get("latest_handoff", ""),
+            "validation": state.get("latest_validation", ""),
+            "pending_questions": str(pending_path),
+            "summary": reason,
+            "next_action": "handle pending questions" if state["stage_status"] == "NEED_USER_INPUT" else "run-loop resumes worker from checkpoint",
+        }
+        write_json(result_path, synthetic)
+        add_history(state, "missing_worker_result_recovered", {
+            "reason": reason,
+            "signature": signature,
+            "repeat_count": repeat_count,
+            "pending": str(pending_path),
+            "checkpoint": str(checkpoint_path) if checkpoint else "",
+            "run": run_summary,
+        })
+        save_state(state_path, state)
+        return {
+            "recovered": True,
+            "state": str(state_path),
+            "stage_status": state["stage_status"],
+            "reason": reason,
+            "pending_questions": str(pending_path),
+            "checkpoint": str(checkpoint_path) if checkpoint else "",
+            "synthetic_worker_result": str(result_path),
+        }
+
+    if checkpoint:
+        state["stage_status"] = "READY"
+        state["current_phase"] = str(checkpoint.get("phase") or state.get("current_phase", ""))
+        state["pending_questions"] = ""
+        reason = "checkpoint found without worker-result; recovered to READY"
+        write_json(result_path, {
+            "status": "RECOVERED_READY",
+            "stage": state.get("current_stage", ""),
+            "phase": state.get("current_phase", ""),
+            "artifact_dir": str(artifact_dir),
+            "handoff": state.get("latest_handoff", ""),
+            "validation": state.get("latest_validation", ""),
+            "pending_questions": "",
+            "summary": reason,
+            "next_action": "run-loop resumes worker from checkpoint",
+        })
+        add_history(state, "missing_worker_result_recovered", {
+            "reason": reason,
+            "signature": signature,
+            "repeat_count": repeat_count,
+            "checkpoint": str(checkpoint_path),
+            "run": run_summary,
+        })
+        save_state(state_path, state)
+        return {
+            "recovered": True,
+            "state": str(state_path),
+            "stage_status": "READY",
+            "reason": reason,
+            "checkpoint": str(checkpoint_path),
+            "synthetic_worker_result": str(result_path),
+        }
+
+    state["stage_status"] = "BLOCKED"
+    add_history(state, "worker_result_missing", {"run": run_summary, "reason": "no pending questions or checkpoint for recovery"})
+    save_state(state_path, state)
+    return {
+        "recovered": False,
+        "state": str(state_path),
+        "stage_status": "BLOCKED",
+        "reason": "worker-result.json missing and no pending questions/checkpoint could be used for recovery",
+    }
+
+
 def command_record_result(args: argparse.Namespace) -> int:
     summary = record_worker_result(Path(args.state), Path(args.result))
     print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -1066,7 +1297,7 @@ def command_record_result(args: argparse.Namespace) -> int:
 
 
 def command_status(args: argparse.Namespace) -> int:
-    state = load_state(Path(args.state).resolve())
+    state = load_state(resolve_state_path(args.state, args.artifact_dir))
     artifact_dir = Path(state.get("artifact_dir") or ".")
     metrics_path = artifact_dir / "worker-run-metrics.json"
     metrics = read_json(metrics_path, {}) if metrics_path.exists() else {}
@@ -1101,6 +1332,9 @@ def command_status(args: argparse.Namespace) -> int:
         "external_result": str(external_result_path) if external_result_path.exists() else "",
         "auto_decisions": str(auto_decisions_path) if auto_decisions_path.exists() else "",
         "retry_count": state.get("retry_count"),
+        "max_missing_result_recoveries": state.get("max_missing_result_recoveries", DEFAULT_MAX_MISSING_RESULT_RECOVERIES),
+        "missing_result_recovery_count": state.get("missing_result_recovery_count", 0),
+        "missing_result_recovery_repeat_count": state.get("missing_result_recovery_repeat_count", 0),
         "worker_proof": compact_worker_proof(metrics, metrics_path) if metrics else {
             "worker_used": False,
             "reason": "worker-run-metrics.json not found",
@@ -1347,6 +1581,7 @@ def run_worker_once(
     max_turns: int = 30,
     permission_mode: str | None = None,
     allowed_tools: str | None = None,
+    mcp_config: str | None = None,
     enable_worker_subagents: bool = False,
 ) -> dict[str, Any]:
     state_path = state_path.resolve()
@@ -1363,6 +1598,11 @@ def run_worker_once(
     prompt_path = artifact_dir / "worker-prompt.md"
     prompt = make_worker_prompt(state)
     prompt_path.write_text(prompt, encoding="utf-8")
+    result_path = artifact_dir / "worker-result.json"
+    if result_path.exists():
+        archive_path = artifact_dir / f"worker-result.previous-{_dt.datetime.now().strftime('%Y%m%d%H%M%S%f')}.json"
+        shutil.move(str(result_path), str(archive_path))
+        add_history(state, "previous_worker_result_archived", {"from": str(result_path), "to": str(archive_path)})
 
     claude = shutil.which("claude")
     if not claude:
@@ -1371,13 +1611,17 @@ def run_worker_once(
     worker_permission_mode = permission_mode or os.environ.get("CLAUDE_WORKER_PERMISSION_MODE") or DEFAULT_WORKER_PERMISSION_MODE
     worker_allowed_tools = allowed_tools or os.environ.get("CLAUDE_WORKER_ALLOWED_TOOLS") or DEFAULT_WORKER_ALLOWED_TOOLS
     stage_skill = resolve_stage_skill(Path(state["project_root"]), state["current_stage"])
+    config_dir = user_claude_config_dir()
     access_dirs = []
     for path in [
         Path(state["project_root"]).resolve(),
         artifact_dir.resolve(),
         stage_skill.parent.resolve(),
+        config_dir.resolve() if config_dir.exists() else None,
         *input_access_dirs(state),
     ]:
+        if path is None:
+            continue
         if path not in access_dirs:
             access_dirs.append(path)
     cmd = [
@@ -1395,6 +1639,9 @@ def run_worker_once(
         "--add-dir",
         *[str(path) for path in access_dirs],
     ]
+    worker_mcp_config = mcp_config or os.environ.get("CLAUDE_WORKER_MCP_CONFIG")
+    if worker_mcp_config:
+        cmd.extend(["--mcp-config", worker_mcp_config])
     if subagents_enabled and allowed_subagents:
         cmd.extend([
             "--agents",
@@ -1450,7 +1697,7 @@ def run_worker_once(
         "metrics": str(metrics_path),
         "worker_proof": compact_worker_proof(metrics, metrics_path),
         "artifact_dir": str(artifact_dir),
-        "worker_result": str(artifact_dir / "worker-result.json"),
+        "worker_result": str(result_path),
         "stdout_classification": stdout_classification,
     }
 
@@ -1462,6 +1709,7 @@ def command_run_worker(args: argparse.Namespace) -> int:
         max_turns=args.max_turns,
         permission_mode=args.permission_mode,
         allowed_tools=args.allowed_tools,
+        mcp_config=args.mcp_config,
         enable_worker_subagents=args.enable_worker_subagents,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -1486,21 +1734,20 @@ def command_step(args: argparse.Namespace) -> int:
         max_turns=args.max_turns,
         permission_mode=args.permission_mode,
         allowed_tools=args.allowed_tools,
+        mcp_config=args.mcp_config,
         enable_worker_subagents=args.enable_worker_subagents,
     )
     result_path = Path(run_summary["worker_result"])
     if not result_path.exists():
-        state = load_state(state_path)
-        state["stage_status"] = "BLOCKED"
-        add_history(state, "worker_result_missing", {"run": run_summary})
-        save_state(state_path, state)
+        recovery = recover_missing_worker_result(state_path, run_summary)
         print(json.dumps({
             "run": run_summary,
-            "state": str(state_path),
-            "stage_status": "BLOCKED",
-            "message": "worker finished but worker-result.json was not created",
+            "recovery": recovery,
+            "state": recovery.get("state", str(state_path)),
+            "stage_status": recovery.get("stage_status", "BLOCKED"),
+            "message": recovery.get("reason", "worker finished but worker-result.json was not created"),
         }, ensure_ascii=False, indent=2))
-        return 1
+        return 0 if recovery.get("recovered") else 1
 
     record_summary = record_worker_result(state_path, result_path)
     print(json.dumps({
@@ -1543,18 +1790,25 @@ def command_run_loop(args: argparse.Namespace) -> int:
             max_turns=args.max_turns,
             permission_mode=args.permission_mode,
             allowed_tools=args.allowed_tools,
+            mcp_config=args.mcp_config,
             enable_worker_subagents=args.enable_worker_subagents,
         )
         result_path = Path(run_summary["worker_result"])
         if not result_path.exists():
-            state = load_state(state_path)
-            state["stage_status"] = "BLOCKED"
-            add_history(state, "worker_result_missing", {"run": run_summary})
-            save_state(state_path, state)
+            recovery = recover_missing_worker_result(state_path, run_summary)
             steps.append({
                 "run": run_summary,
-                "message": "worker finished but worker-result.json was not created",
+                "recovery": recovery,
+                "message": recovery.get("reason", "worker finished but worker-result.json was not created"),
             })
+            if recovery.get("recovered"):
+                state_path = Path(recovery.get("state", str(state_path))).resolve()
+                if recovery.get("stage_status") == "READY":
+                    continue
+                if recovery.get("stage_status") == "NEED_USER_INPUT":
+                    auto_enabled = bool(args.full_auto or load_state(state_path).get("full_auto") or load_state(state_path).get("auto_confirm_mode") == "ai")
+                    if auto_enabled:
+                        continue
             break
         record_summary = record_worker_result(state_path, result_path)
         state_path = Path(record_summary["state"]).resolve()
@@ -1629,6 +1883,11 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         )
         worker_parser.add_argument(
+            "--mcp-config",
+            default=None,
+            help="Optional MCP config file for claude -p workers. Defaults to CLAUDE_WORKER_MCP_CONFIG when set.",
+        )
+        worker_parser.add_argument(
             "--enable-worker-subagents",
             action="store_true",
             help="Allow the worker to spawn stage-scoped read-only subagents for local research/review tasks.",
@@ -1648,10 +1907,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--input-file", "--document", dest="input_file", help="Initial requirement document path. Stored in workflow-input.json for requirement-analysis Mode B.")
     p_init.add_argument("--source-type", default="auto", choices=["auto", "ticket_url", "manual_text", "document_file", "mixed", "goal_only"], help="Override initial input source type. Default infers from --url/--input-text/--input-file/--goal.")
     p_init.add_argument("--project-root")
-    p_init.add_argument("--artifact-dir")
+    p_init.add_argument("--artifact-dir", "--artifacts-dir", dest="artifact_dir")
     p_init.add_argument("--run-id")
     p_init.add_argument("--stage", default="requirement-analysis", choices=STAGES)
     p_init.add_argument("--max-retries", type=int, default=2)
+    p_init.add_argument("--max-missing-result-recoveries", type=int, default=DEFAULT_MAX_MISSING_RESULT_RECOVERIES, help="Maximum recoveries for the same missing worker-result signature before BLOCKED.")
     p_init.add_argument("--auto-advance", action="store_true", help="Automatically enter the next stage after validation succeeds. Off by default.")
     p_init.add_argument("--full-auto", action="store_true", help="Use AI auto decisions for pending questions. Does not skip real external actions.")
     p_init.add_argument("--auto-confirm", action="store_true", help="Alias-style switch for AI auto decisions without changing stage auto-advance behavior.")
@@ -1679,7 +1939,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_record.set_defaults(func=command_record_result)
 
     p_status = sub.add_parser("status", help="Print lightweight workflow status.")
-    p_status.add_argument("--state", required=True)
+    p_status.add_argument("--state")
+    p_status.add_argument("--artifact-dir", "--artifacts-dir", dest="artifact_dir", help="Artifact directory containing workflow-state.json.")
     p_status.set_defaults(func=command_status)
 
     p_audit = sub.add_parser("audit", help="Audit whether the latest stage ran in an isolated claude -p worker.")

@@ -17,6 +17,8 @@ description: >
 - 不要猜固定安装路径，例如 `C:\Users\.claude`、`~/.claude` 或项目根目录下的 `.claude/skills/workflow-orchestrator`。只能从当前已加载的 `workflow-orchestrator/SKILL.md` 所在目录定位脚本。
 - 执行脚本前必须做安全检查：目标文件存在，开头是 Python 脚本，例如 `#!/usr/bin/env python3`，第二行可为 `# -*- coding: utf-8 -*-`。如果开头是 `---`、`name:`、`description:` 或中文 skill 描述，说明定位到了 `SKILL.md` 或安装损坏，必须停止并报告，不要继续用 Python 执行。
 - 初始化时要把用户输入写入 `workflow-input.json`。Ticket URL 使用 `--url`/`--ticket-url`，直接需求文本使用 `--input-text`/`--requirement`，本地文档使用 `--input-file`/`--document`；只有自然语言 `--goal` 时也必须按 Mode B 交给 requirement-analysis。
+- 内部脚本兼容 `--artifact-dir` 和 `--artifacts-dir`，二者含义相同；`status` 可用 `--state` 或 `--artifact-dir/--artifacts-dir` 定位状态，不要无状态调用。
+- requirement-analysis worker 需要访问 SSO 配置时，orchestrator 必须把用户的 `~/.claude/config` 加入 worker `--add-dir`；如果需要 Playwright/MCP，必须确保 worker 的 allowed tools 和 MCP 配置包含对应 MCP 工具。
 - 用户明确要求“全自动流程”“自动完成所有阶段”“不要人工确认”时，初始化必须使用 `--full-auto`。全自动不是跳过问题，而是由独立 AI auto-decision worker 多轮复核后把答案写入 `decisions.jsonl`。
 - 当前仓库只启用 `requirement-analysis` 和 `design-phase` 两个阶段。`design-phase` 通过 validator 后，workflow 标记为 `COMPLETED`，不要继续启动原型、编码或自测阶段。
 
@@ -26,7 +28,8 @@ description: >
 - 每个阶段默认必须由脚本通过 `claude -p` 启动独立 worker。没有可审计隔离 runner 时，标记 `BLOCKED`，不要让主 session 代替 worker 执行子 skill。
 - 阶段之间只通过文件交接：`*-handoff.json`、`*-validation.json`、`worker-result.json`、`workflow-state.json`、`decisions.jsonl`。
 - worker 必须先读对应子 skill 的 `SKILL.md`。子 skill 的业务流程优先，orchestrator 只覆盖交互方式：worker 不能直接问用户，必须写 `pending-questions.json` 后退出。
-- worker 遇到用户确认、SSO、人机验证、文件选择、外部系统操作、长时间人工处理、MCP/浏览器等不能跨进程保存的资源时，必须先写 `worker-checkpoint.json` 和必要的 `external-action.json`，再写 `worker-result.json(status=NEED_USER_INPUT)` 后退出。
+- worker 遇到用户确认、SSO、人机验证、文件选择、外部系统操作、长时间人工处理、MCP/浏览器等不能跨进程保存的资源时，必须先写 `worker-checkpoint.json` 和必要的 `external-action.json`，再写 `pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)` 后退出；禁止只写 pending 不写 result。
+- 如果 worker 因 max-turns 被截断但已经留下 `pending-questions.json` 或 `worker-checkpoint.json`，orchestrator 可以自动恢复到 `NEED_USER_INPUT` 或 `READY`。同一 pending/checkpoint 重复恢复超过上限后才标记 `BLOCKED`，避免死循环。
 - 用户回答或主流程完成外部动作后，主 session 只能写 `decisions.jsonl` 或 `external-result.json`，然后重新调用 `run-loop` 拉起 worker。禁止在主 session 里继续执行 requirement-analysis 或 design-phase。
 - 全自动模式下，主 session 不替 worker 执行业务阶段；它只在 `NEED_USER_INPUT` 时调度 auto-decision worker。auto-decision worker 必须输出可审计决策，不能直接改阶段产物。
 - 重新 `run-loop` 不是恢复同一个进程，而是启动新的隔离 worker。worker 必须根据 `worker-checkpoint.json`、`decisions.jsonl`、`external-result.json` 断点继续，不能重复已经完成的步骤。
@@ -95,6 +98,7 @@ worker prompt 必须包含：
 - 主 session 没有读取或复述完整需求/设计/代码大文档。
 - 每个阶段都有 `worker-result.json`。
 - 通过 worker 执行的阶段都有 `worker-run-metrics.json`。
+- worker 被截断时，如果存在 pending/checkpoint，状态已通过恢复机制处理；如果同一恢复签名反复出现，流程会停止而不是无限加 turns。
 - 需要人工确认时，问题来自 `pending-questions.json`，回答写入 `decisions.jsonl`。
 - 每个阶段完成前对应 validation 为 `success=true`。
 - `workflow-state.json` 的 `current_stage`、`stage_status`、`latest_handoff`、`latest_validation` 已更新。

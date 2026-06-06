@@ -12,7 +12,7 @@
 ## 内部调用表
 
 ```text
-python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py init --goal "<目标>" [--url "<ticket URL>"] [--input-text "<直接需求文本>"] [--input-file "<需求文档路径>"]
+python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py init --goal "<目标>" [--url "<ticket URL>"] [--input-text "<直接需求文本>"] [--input-file "<需求文档路径>"] [--artifact-dir "<产物目录>"]
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py prompt --state <artifact_dir>/workflow-state.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py step --state <artifact_dir>/workflow-state.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py run-loop --state <artifact_dir>/workflow-state.json
@@ -20,6 +20,7 @@ python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py auto-d
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py record-result --state <artifact_dir>/workflow-state.json --result <artifact_dir>/worker-result.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py add-decision --state <artifact_dir>/workflow-state.json --question-batch-id Q-0001 --question-id <id> --selected <key>
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py status --state <artifact_dir>/workflow-state.json
+python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py status --artifact-dir <artifact_dir>
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py audit --state <artifact_dir>/workflow-state.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py metrics --state <artifact_dir>/workflow-state.json
 ```
@@ -34,6 +35,8 @@ python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py metric
 - 用户直接描述需求时，内部使用 `--input-text` 或仅把完整需求放入 `--goal`，脚本写入 `workflow-input.json(source_type=manual_text|goal_only)`。
 - 用户给本地需求文档时，内部使用 `--input-file` 或 `--document`，脚本写入 `workflow-input.json(source_type=document_file)`，worker 会被授予文档所在目录的读取权限。
 - 不要让用户手动执行这些命令；它们只是主流程内部接口。
+- `--artifacts-dir` 是 `--artifact-dir` 的兼容别名，用于接住自然语言生成的复数参数。
+- `status` 子命令优先传 `--state`；也可传 `--artifact-dir/--artifacts-dir`。如果都没有，脚本会尝试读取项目根目录 `.claude/workflow-orchestrator-last-state.json` 中的最近 state 指针。
 
 ## 状态含义
 
@@ -43,15 +46,29 @@ python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py metric
 - `BLOCKED`：缺少阶段 skill、MCP 不可用、缺少可审计 runner 或外部阻塞。
 - `COMPLETED`：当前启用的 workflow 阶段全部完成。
 
+缺失 `worker-result.json` 的恢复：
+
+- 如果 worker 被 `max_turns` 截断但留下了 `pending-questions.json`，脚本恢复为 `NEED_USER_INPUT`，并写一个合成 `worker-result.json` 作为审计痕迹。
+- 如果 pending 已被 `decisions.jsonl` 回答且存在 `worker-checkpoint.json`，脚本恢复为 `READY`，下一轮 worker 从 checkpoint 继续。
+- 如果只有 checkpoint 没有 pending，脚本恢复为 `READY`。
+- 如果没有 pending/checkpoint，或同一 pending/checkpoint 重复恢复超过 `max_missing_result_recoveries`，才标记 `BLOCKED`。
+- 不要通过手动编辑 `workflow-state.json` 从 `BLOCKED` 改回 `READY`；优先依赖恢复机制或重新初始化。
+
 ## Worker 调用要求
 
 脚本通过 `run-worker` / `run-loop` 自动启动 `claude -p` worker。worker 默认应带：
 
 - `--permission-mode acceptEdits`
 - `--add-dir` 当前项目、产物目录和阶段 skill 目录
-- `--allowed-tools Read,Write,Edit,MultiEdit,Glob,Grep,LS,WebFetch,WebSearch,Bash(python *),Bash(py *)`
+- `--allowed-tools Read,Write,Edit,MultiEdit,Glob,Grep,LS,WebFetch,WebSearch,mcp__playwright,mcp__browser,mcp__browser_use,Bash(python *),Bash(py *)`
 - `--no-session-persistence`
 - `--output-format json`
+
+SSO / Playwright MCP 注意：
+
+- requirement-analysis 需要自动 SSO 登录时，worker 必须能读取 `%USERPROFILE%\.claude\config\internal-urls.yaml`。orchestrator 会把 `~/.claude/config` 加入 worker `--add-dir`。
+- 如果 Playwright MCP 不是 Claude Code 默认可见配置，内部调用 worker 时设置 `CLAUDE_WORKER_MCP_CONFIG` 或传 `--mcp-config <mcp-config.json>`。
+- 默认 worker allowed tools 包含常见 `mcp__playwright` / `mcp__browser` 命名空间；如果你的 MCP server 名不同，设置 `CLAUDE_WORKER_ALLOWED_TOOLS` 覆盖或追加。
 
 如果 `claude` CLI 不可用，主流程只能生成 `worker-prompt.md` 供排障查看，不能在主 session 手工执行该 prompt；此时应报告缺少可审计隔离 runner 或标记 `BLOCKED`。
 

@@ -39,8 +39,9 @@ Ticket URL 不是固定配置，由用户每次需求分析时提供。未提供
 2. 如果轻量抓取失败、跳转 SSO、403、超时或内容为空，自动切换到 Playwright MCP 或浏览器抓取。
 3. 如果需要 SSO 登录：
    - 已配置账号密码时按配置自动登录。
+   - worker 模式下也必须先读取 `internal-urls.yaml`；如果 `sso_username`、`sso_password`、`sso_selectors` 和 Playwright/MCP 能力可用，不要把登录回传主流程。
    - 未配置密码时，直连人工模式用 `AskQuestion` 告知用户在浏览器中完成登录，不要让用户把密码贴到对话中。
-   - worker 模式写 `external-action.json(action_type=BROWSER_LOGIN|HUMAN_VERIFICATION)`、`worker-checkpoint.json`、`pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)` 后停止。
+   - worker 模式只有在缺少密码、缺少选择器、MCP/浏览器不可用、登录失败或需要人机验证时，才写 `external-action.json(action_type=BROWSER_LOGIN|HUMAN_VERIFICATION)`、`worker-checkpoint.json`、`pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)` 后停止。
 4. 抓取完成后提取需求标题、正文、附件线索、平台名称、平台版本和原始文本。
 
 ## Mode B：手动输入或文档粘贴
