@@ -16,7 +16,8 @@ description: >
 - 脚本是本 skill 的内部实现工具。主流程需要时自动定位当前 `workflow-orchestrator` skill 目录下的 `scripts/workflow_orchestrator.py` 并调用。
 - 不要猜固定安装路径，例如 `C:\Users\.claude`、`~/.claude` 或项目根目录下的 `.claude/skills/workflow-orchestrator`。只能从当前已加载的 `workflow-orchestrator/SKILL.md` 所在目录定位脚本。
 - 执行脚本前必须做安全检查：目标文件存在，开头是 Python 脚本，例如 `#!/usr/bin/env python3`，第二行可为 `# -*- coding: utf-8 -*-`。如果开头是 `---`、`name:`、`description:` 或中文 skill 描述，说明定位到了 `SKILL.md` 或安装损坏，必须停止并报告，不要继续用 Python 执行。
-- 初始化时要把用户输入写入 `workflow-input.json`。Ticket URL 使用 `--url`/`--ticket-url`，直接需求文本使用 `--input-text`/`--requirement`，本地文档使用 `--input-file`/`--document`；只有自然语言 `--goal` 时也必须按 Mode B 交给 requirement-analysis。
+- 初始化时要把用户输入写入 `workflow-input.json`。Ticket URL 使用 `--url`/`--ticket-url`，直接需求文本使用 `--input-text`/`--requirement`，本地文档使用 `--input-file`/`--document`；如果没有显式 `--goal`，脚本会根据输入自动生成默认目标。只有自然语言 `--goal` 时也必须按 Mode B 交给 requirement-analysis。
+- 初始化默认复用同一项目、同一输入、同一阶段下最近的活动 workflow，避免纠错时重复创建 `_workflow/<run_id>` 目录。只有用户明确要求新建或内部确实需要并行 workflow 时，才使用 `--no-reuse-existing`、`--run-id` 或 `--artifact-dir`。
 - 内部脚本兼容 `--artifact-dir` 和 `--artifacts-dir`，二者含义相同；`status` 可用 `--state` 或 `--artifact-dir/--artifacts-dir` 定位状态，不要无状态调用。
 - requirement-analysis worker 需要访问 SSO 配置时，orchestrator 必须把用户的 `~/.claude/config` 加入 worker `--add-dir`；如果需要 Playwright/MCP，必须确保 worker 的 allowed tools 和 MCP 配置包含对应 MCP 工具。
 - 用户明确要求“全自动流程”“自动完成所有阶段”“不要人工确认”时，初始化必须使用 `--full-auto`。全自动不是跳过问题，而是由独立 AI auto-decision worker 多轮复核后把答案写入 `decisions.jsonl`。
@@ -27,6 +28,8 @@ description: >
 - 不依赖 auto compact。上下文控制靠文件交接和 worker 隔离，自动压缩只能兜底。
 - 每个阶段默认必须由脚本通过 `claude -p` 启动独立 worker。没有可审计隔离 runner 时，标记 `BLOCKED`，不要让主 session 代替 worker 执行子 skill。
 - 阶段之间只通过文件交接：`*-handoff.json`、`*-validation.json`、`worker-result.json`、`workflow-state.json`、`decisions.jsonl`。
+- 所有 JSON 交接文件必须通过 JSON serializer 写入，禁止手工拼接 JSON 字符串。写完必须重新 `json.load` 校验，尤其是验收标准、问题描述、API 示例中包含双引号、反斜杠或换行时。
+- 如果 `*-validation.json` 报告 `invalid JSON`、`JSONDecodeError`、`Expecting delimiter` 或 `Invalid control character`，主 session 只读取 validation 中的错误行列和短 `json_error.context`，然后重新调度 worker 用 serializer 重写 JSON。不要在主 session 展开读取完整 handoff/Markdown，也不要把优先排查方向转成 BOM 或隐藏字符。
 - worker 必须先读对应子 skill 的 `SKILL.md`。子 skill 的业务流程优先，orchestrator 只覆盖交互方式：worker 不能直接问用户，必须写 `pending-questions.json` 后退出。
 - worker 遇到用户确认、SSO、人机验证、文件选择、外部系统操作、长时间人工处理、MCP/浏览器等不能跨进程保存的资源时，必须先写 `worker-checkpoint.json` 和必要的 `external-action.json`，再写 `pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)` 后退出；禁止只写 pending 不写 result。
 - 如果 worker 因 max-turns 被截断但已经留下 `pending-questions.json` 或 `worker-checkpoint.json`，orchestrator 可以自动恢复到 `NEED_USER_INPUT` 或 `READY`。同一 pending/checkpoint 重复恢复超过上限后才标记 `BLOCKED`，避免死循环。
@@ -59,6 +62,7 @@ description: >
 - `pending-questions.json` 中需要问用户的问题。
 - `decisions.jsonl` 中用户刚回答的决策。
 - `status` / `audit` / `metrics` 的 worker 证明摘要。
+- validation 文件里的 `errors`、`warnings` 和 `json_error` 短上下文。
 
 主 session 默认不要读取：
 

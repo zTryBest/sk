@@ -77,6 +77,8 @@ description: >
 
 Phase 5 的写入顺序是机器文件优先：先写 `requirement-handoff.json`，再运行 validator 生成 `requirement-validation.json`，随后尽早写 `worker-result.json`。草稿也必须写 handoff，`source.requirement_status=draft`，并把未解决问题写入 `open_questions`。Markdown 文档和 `design-phase-handoff.md` 可以随后补齐，但不能只写 Markdown 而缺少机器文件。
 
+`requirement-handoff.json` 必须通过 JSON serializer 写入，不要手工拼接 JSON 字符串。验收标准中出现双引号、反斜杠或换行时必须由 serializer 自动转义；写完后立即用 `json.load` 重新读取。
+
 最终产物必须位于 `<项目根目录>/requirements/<product_id-product_version>/` 或等价产品目录。写入后重新读取，确认不是空文件、不是摘要占位符，并包含功能项、平台依赖、澄清记录和 design-phase 交接上下文。
 
 ## Orchestrator Worker 模式

@@ -30,6 +30,7 @@ design-phase 涉及用户交互时必须使用 `AskQuestion`，不能用普通�
 - 每个问题必须有稳定 `id`；同一个问题重试时复用同一个 `id`。
 - 遇到启动 MCP 服务、导入/补充知识库、选择本地文件、访问外部系统、人机验证或长时间人工处理，写 `external-action.json` 和 `worker-checkpoint.json`，再写 pending/result 后停止；恢复后读取 `external-result.json` 并从 checkpoint 继续。
 - worker 模式下也不能隐藏 MCP 过程；MCP 搜索计划、调用日志、候选淘汰原因必须落入 `design-handoff.json`。
+- `design-handoff.json`、`pending-questions.json` 和 `worker-result.json` 必须用 JSON serializer 写入，写完立即 `json.load` 校验；不要手工拼接包含双引号、反斜杠或换行的 JSON 字符串。
 - 阶段完成时写 `worker-result.json(status=STAGE_COMPLETED)`，包含 `artifact_dir`、`handoff`、`validation` 和简短 `summary`。
 - 校验失败时先分类：涉及 `UNDECIDED`、`待确认`、架构/中间件选择、MCP 计划确认、候选 API 选择、数据库类型、风险处理等用户决策的问题，必须转 pending；纯文档结构或字段漏写可基于已确认事实补充后重跑 validator。
 - worker 模式下不要询问“是否继续进入原型/编码/自测”。设计完成且 validator 成功时直接返回 `STAGE_COMPLETED`。

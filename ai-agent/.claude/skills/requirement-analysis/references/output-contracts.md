@@ -138,6 +138,12 @@
 
 ## requirement-handoff.json
 
+写入安全规则：
+
+- 必须先构造 JSON 对象，再用 `json.dumps(..., ensure_ascii=False, indent=2)`、`json.dump(...)` 或等价结构化 API 写入。
+- 禁止手工拼接 JSON 字符串。验收标准、澄清问题、用户原话中如果包含 `"`，必须让 serializer 自动转义成 `\"`。
+- 写入后立即运行 `json.load(open(<path>, encoding="utf-8"))` 重新读取；读取失败时先修复 JSON 转义，再运行 validator。
+
 ```json
 {
   "schema_version": "1.0",
@@ -218,6 +224,7 @@ python <requirement-analysis-skill-dir>/scripts/validate_requirement.py --handof
 
 校验失败时：
 
+- 如果错误是 `invalid JSON`、`JSONDecodeError`、`Expecting ',' delimiter`、`Invalid control character` 等 JSON 解析错误，只读取 validator 输出的 `json_error` 行列和短上下文，先用 serializer 重写 JSON，不要人工查找和替换局部引号，也不要把优先排查方向转成 BOM 或隐藏字符。
 - 涉及待确认、新事实、open questions、目标对象来源、产品/版本缺失时，回到澄清阶段。
 - 章节缺失、验收标准数量不足、字段漏写等不需要新事实的问题，可以基于已知事实补充后重跑。
 

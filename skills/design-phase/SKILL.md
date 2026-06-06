@@ -93,6 +93,7 @@ Phase 详情、状态账本和各阶段输出要求见 `references/phase-details
 - 如果没有 checkpoint，按 Phase 0-9 顺序执行。
 - 需要用户确认或主流程外部动作时，写 checkpoint、pending/external-action、worker-result 后停止。
 - worker 模式下也不能隐藏 MCP 过程；MCP 搜索计划、调用日志、候选淘汰原因必须落入 `design-handoff.json`。
+- `design-handoff.json`、`pending-questions.json` 和 `worker-result.json` 必须通过 JSON serializer 写入，写完立即 `json.load` 校验；API 示例、请求/响应样例和用户原话中的双引号不能破坏 JSON。
 - 阶段完成且 `design-validation.json.success=true` 时，写 `worker-result.json(status=STAGE_COMPLETED)`；是否进入后续阶段由 orchestrator 处理。
 
 完整协议见 `references/worker-mode.md`。

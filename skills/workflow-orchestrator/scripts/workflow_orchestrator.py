@@ -282,7 +282,7 @@ def build_initial_input(args: argparse.Namespace) -> dict[str, Any]:
     if requested_type == "document_file" and not any(source.get("type") == "document_file" for source in sources):
         raise SystemExit("--source-type document_file requires --input-file or --document")
     if requested_type in {"manual_text", "goal_only"} and not sources:
-        sources.append({"type": "manual_text", "content": args.goal, "from": "goal"})
+        sources.append({"type": "manual_text", "content": args.goal or "", "from": "goal"})
 
     if requested_type != "auto":
         source_type = requested_type
@@ -292,15 +292,68 @@ def build_initial_input(args: argparse.Namespace) -> dict[str, Any]:
         source_type = sources[0]["type"]
     else:
         source_type = "goal_only"
-        sources.append({"type": "manual_text", "content": args.goal, "from": "goal"})
+        sources.append({"type": "manual_text", "content": args.goal or "", "from": "goal"})
 
     return {
         "schema_version": "1.0",
         "source_type": source_type,
-        "goal": args.goal,
+        "goal": args.goal or default_goal_for_sources(sources, source_type),
         "sources": sources,
         "created_at": now_iso(),
     }
+
+
+def default_goal_for_sources(sources: list[dict[str, Any]], source_type: str) -> str:
+    if any(source.get("type") == "ticket_url" for source in sources):
+        return "从需求单 URL 提取需求并执行工作流"
+    if any(source.get("type") == "document_file" for source in sources):
+        return "从需求文档提取需求并执行工作流"
+    if any(source.get("type") == "manual_text" and str(source.get("content") or "").strip() for source in sources):
+        return "根据用户提供的需求描述执行工作流"
+    if source_type == "goal_only":
+        return "根据用户目标执行工作流"
+    return "执行需求分析和方案设计工作流"
+
+
+def source_signature(initial_input: dict[str, Any]) -> dict[str, Any]:
+    sources: list[dict[str, Any]] = []
+    for source in initial_input.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        normalized = {key: source.get(key) for key in sorted(source) if key not in {"created_at"}}
+        sources.append(normalized)
+    return {
+        "source_type": initial_input.get("source_type", ""),
+        "sources": sources,
+    }
+
+
+def same_initial_source(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    return source_signature(a) == source_signature(b)
+
+
+def find_reusable_workflow(project_root: Path, initial_input: dict[str, Any], stage: str) -> Path | None:
+    workflow_root = project_root / "requirements" / "_workflow"
+    if not workflow_root.exists():
+        return None
+    state_paths = sorted(
+        workflow_root.glob("*/workflow-state.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    reusable_statuses = {"READY", "NEED_USER_INPUT", "VALIDATION_FAILED", "RUNNING"}
+    for state_path in state_paths:
+        state = read_json(state_path, {})
+        if not isinstance(state, dict):
+            continue
+        if state.get("current_stage") != stage:
+            continue
+        if state.get("stage_status") not in reusable_statuses:
+            continue
+        existing_input = read_json(state_path.parent / state.get("workflow_input", "workflow-input.json"), {})
+        if isinstance(existing_input, dict) and same_initial_source(existing_input, initial_input):
+            return state_path.resolve()
+    return None
 
 
 def initial_input_path(state: dict[str, Any]) -> Path:
@@ -590,6 +643,7 @@ artifact_dir: {artifact_dir}
     validation_policy = """
 校验失败处理规则：
 - 不要把 validation errors 机械改成通过。先判断错误类型。
+- 如果错误是 invalid JSON、JSONDecodeError、Expecting delimiter、Invalid control character，按纯 JSON 序列化修复处理：读取 validator 输出中的 json_error 行列和短 context，重建内存 JSON 对象并用 serializer 重写 handoff，然后重新 json.load 和 validator。不要把它解释成 BOM/隐藏字符问题，不要在主流程展开读取完整 handoff 或 Markdown。
 - 如果错误涉及 pending markers、待确认、open_questions、UNDECIDED、target_object_resolution.status=open、缺少用户决策、缺少产品/版本、缺少数据库类型、候选 API 选择等事实不足或人工确认问题，禁止自行替换字段，必须写 pending-questions.json 和 worker-result.json(status=NEED_USER_INPUT) 后停止。
 - 只有纯文档结构、验收标准数量不足、字段遗漏但不需要新业务事实的问题，才允许 worker 基于已知需求自行补充并重新运行 validator。
 - 如果不确定某个 validation error 是否需要用户确认，按 NEED_USER_INPUT 处理。
@@ -673,6 +727,8 @@ workflow_goal: {workflow_goal}
 - 阶段产物必须写在 artifact_dir 或阶段 skill 指定的 requirements 产品目录下。
 - 如果 requirement-analysis 识别出了产品目录，worker-result.json.artifact_dir 必须指向最终产品目录。
 - 阶段完成后必须生成 {handoff_file} 和 {validation_file}。
+- 所有 JSON 文件都必须用 JSON serializer 写入，禁止手工拼接 JSON 文本。推荐用 Python `json.dump(data, ensure_ascii=False, indent=2)` 或等价结构化写入；写完必须立即用 `json.load(open(path, encoding="utf-8"))` 重新读取校验。字符串里出现双引号、反斜杠、换行、中文标点时，让 serializer 自动转义，不要手动写未转义的 `"..."`。
+- 如果发现 `*-handoff.json`、`pending-questions.json` 或 `worker-result.json` 解析失败，先用 serializer 重写并重跑 validator；不要把无效 JSON 当作阶段完成，也不要把排查方向转到 BOM/隐藏字符。
 - 阶段完成后必须运行对应 validator；validation success=false 时按下面的校验失败处理规则分流，不允许把待确认事实伪造成已确认。
 
 {validation_policy}
@@ -697,14 +753,35 @@ worker-result.json 格式：
 
 def command_init(args: argparse.Namespace) -> int:
     project_root = resolve_project_root(args.project_root)
+    initial_input = build_initial_input(args)
+    explicit_artifact = bool(args.artifact_dir or args.run_id)
+    if not explicit_artifact and not args.no_reuse_existing:
+        reusable_state = find_reusable_workflow(project_root, initial_input, args.stage)
+        if reusable_state:
+            reusable = load_state(reusable_state)
+            artifact_dir = Path(reusable.get("artifact_dir") or reusable_state.parent).resolve()
+            write_last_state_pointer(project_root, reusable_state, artifact_dir)
+            add_history(reusable, "init_reused_existing", {
+                "stage": args.stage,
+                "input_source_type": initial_input.get("source_type", ""),
+            })
+            save_state(reusable_state, reusable)
+            print(json.dumps({
+                "state": str(reusable_state),
+                "artifact_dir": str(artifact_dir),
+                "reused_existing": True,
+                "message": "matching active workflow already exists; reused it instead of creating a duplicate",
+            }, ensure_ascii=False, indent=2))
+            return 0
+
     run_id = args.run_id or _dt.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     artifact_dir = Path(args.artifact_dir).resolve() if args.artifact_dir else default_artifact_dir(project_root, run_id)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    initial_input = build_initial_input(args)
+    workflow_goal = args.goal or initial_input.get("goal") or default_goal_for_sources(initial_input.get("sources", []), initial_input.get("source_type", ""))
 
     state = {
         "schema_version": "1.0",
-        "workflow_goal": args.goal,
+        "workflow_goal": workflow_goal,
         "workflow_input": "workflow-input.json",
         "input_source_type": initial_input["source_type"],
         "input_sources_count": len(initial_input.get("sources", [])),
@@ -743,7 +820,7 @@ def command_init(args: argparse.Namespace) -> int:
     write_json(state_path, state)
     write_last_state_pointer(project_root, state_path, artifact_dir)
     (artifact_dir / "decisions.jsonl").touch(exist_ok=True)
-    print(json.dumps({"state": str(state_path), "artifact_dir": str(artifact_dir)}, ensure_ascii=False, indent=2))
+    print(json.dumps({"state": str(state_path), "artifact_dir": str(artifact_dir), "reused_existing": False}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -2110,7 +2187,7 @@ def build_parser() -> argparse.ArgumentParser:
         auto_parser.add_argument("--auto-decision-allowed-tools", default=None, help="Allowed tools for the auto-decision worker. Defaults to read-only tools.")
 
     p_init = sub.add_parser("init", help="Initialize a workflow state directory.")
-    p_init.add_argument("--goal", required=True)
+    p_init.add_argument("--goal", default=None, help="Workflow goal. Optional when --url/--input-text/--input-file is provided; a default goal will be generated.")
     p_init.add_argument("--url", "--ticket-url", dest="url", help="Initial requirement ticket URL. Stored in workflow-input.json for requirement-analysis Mode A.")
     p_init.add_argument("--input-text", "--requirement", dest="input_text", help="Initial requirement text. Stored in workflow-input.json for requirement-analysis Mode B.")
     p_init.add_argument("--input-file", "--document", dest="input_file", help="Initial requirement document path. Stored in workflow-input.json for requirement-analysis Mode B.")
@@ -2118,6 +2195,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--project-root")
     p_init.add_argument("--artifact-dir", "--artifacts-dir", dest="artifact_dir")
     p_init.add_argument("--run-id")
+    p_init.add_argument("--no-reuse-existing", action="store_true", help="Always create a new workflow state instead of reusing a matching active one.")
     p_init.add_argument("--stage", default="requirement-analysis", choices=STAGES)
     p_init.add_argument("--max-retries", type=int, default=2)
     p_init.add_argument("--max-missing-result-recoveries", type=int, default=DEFAULT_MAX_MISSING_RESULT_RECOVERIES, help="Maximum recoveries for the same missing worker-result signature before BLOCKED.")

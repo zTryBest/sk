@@ -41,6 +41,12 @@
 
 `design-handoff.json` 是后续原型、编码和自测阶段的机器可读入口。Markdown 设计文档用于人工审阅；自动化流水线必须优先读取 JSON。
 
+写入安全规则：
+
+- 必须先构造 JSON 对象，再用 `json.dumps(..., ensure_ascii=False, indent=2)`、`json.dump(...)` 或等价结构化 API 写入。
+- 禁止手工拼接 JSON 字符串。API 示例、请求/响应样例、用户原话中如果包含 `"`，必须让 serializer 自动转义。
+- 写入后立即运行 `json.load(open(<path>, encoding="utf-8"))` 重新读取；读取失败时先修复 JSON 转义，再运行 validator。
+
 ```json
 {
   "schema_version": "1.0",
@@ -172,6 +178,8 @@ python <design-phase-skill-dir>/scripts/validate_design.py --handoff <交接目�
 如果当前安装中没有 validator 脚本，不能假装已运行；应明确说明缺少校验脚本，并将阶段标记为不可交接或 `BLOCKED`，除非 orchestrator 提供等价 validator。
 
 校验失败时，读取 `design-validation.json.errors`，修复设计文档和 JSON 后重新运行。不能在校验失败时声明方案设计完成，也不能进入原型、编码或自测阶段。
+
+如果错误是 `invalid JSON`、`JSONDecodeError`、`Expecting ',' delimiter`、`Invalid control character` 等 JSON 解析错误，只读取 validator 输出的 `json_error` 行列和短上下文，先用 serializer 重写 JSON，不要人工查找和替换局部引号，也不要把优先排查方向转成 BOM 或隐藏字符。
 
 ## 完成检查
 

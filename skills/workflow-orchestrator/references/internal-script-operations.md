@@ -12,7 +12,7 @@
 ## 内部调用表
 
 ```text
-python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py init --goal "<目标>" [--url "<ticket URL>"] [--input-text "<直接需求文本>"] [--input-file "<需求文档路径>"] [--artifact-dir "<产物目录>"]
+python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py init [--goal "<目标>"] [--url "<ticket URL>"] [--input-text "<直接需求文本>"] [--input-file "<需求文档路径>"] [--artifact-dir "<产物目录>"]
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py prompt --state <artifact_dir>/workflow-state.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py step --state <artifact_dir>/workflow-state.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py run-loop --state <artifact_dir>/workflow-state.json
@@ -34,6 +34,9 @@ python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py metric
 - 用户给 ticket URL 时，内部使用 `--url` 或 `--ticket-url`，脚本写入 `workflow-input.json(source_type=ticket_url)`。
 - 用户直接描述需求时，内部使用 `--input-text` 或仅把完整需求放入 `--goal`，脚本写入 `workflow-input.json(source_type=manual_text|goal_only)`。
 - 用户给本地需求文档时，内部使用 `--input-file` 或 `--document`，脚本写入 `workflow-input.json(source_type=document_file)`，worker 会被授予文档所在目录的读取权限。
+- `--goal` 在有 URL、直接文本或文档输入时不是必填；脚本会自动生成默认目标，避免自然语言入口漏参后重复纠错。
+- `init` 默认会复用同一项目、同一输入、同一阶段的活动 workflow，并在输出里返回 `reused_existing=true`。收到该输出后，下一步必须使用返回的 `state` 调 `run-loop/status/audit`，不要再次 init。
+- 只有用户明确要求新建一次独立 workflow，或内部确实需要并行流程时，才传 `--no-reuse-existing`、`--run-id` 或 `--artifact-dir`。
 - 不要让用户手动执行这些命令；它们只是主流程内部接口。
 - `--artifacts-dir` 是 `--artifact-dir` 的兼容别名，用于接住自然语言生成的复数参数。
 - `status` 子命令优先传 `--state`；也可传 `--artifact-dir/--artifacts-dir`。如果都没有，脚本会尝试读取项目根目录 `.claude/workflow-orchestrator-last-state.json` 中的最近 state 指针。

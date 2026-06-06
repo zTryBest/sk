@@ -46,6 +46,33 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def json_error_detail(path: Path, exc: json.JSONDecodeError, radius: int = 1) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "error_type": "invalid_json",
+        "message": exc.msg,
+        "line": exc.lineno,
+        "column": exc.colno,
+        "position": exc.pos,
+        "repair_action": "rewrite_with_json_serializer",
+    }
+    try:
+        lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    except OSError as read_exc:
+        detail["context_error"] = str(read_exc)
+        return detail
+
+    start = max(1, exc.lineno - radius)
+    end = min(len(lines), exc.lineno + radius)
+    context = []
+    for line_no in range(start, end + 1):
+        text = lines[line_no - 1]
+        if len(text) > 240:
+            text = text[:237] + "..."
+        context.append({"line": line_no, "text": text})
+    detail["context"] = context
+    return detail
+
+
 def is_blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
@@ -305,6 +332,7 @@ def main() -> int:
         data = read_json(handoff_path)
         result = validate(data, handoff_path, args.project_root)
     except json.JSONDecodeError as exc:
+        error_detail = json_error_detail(handoff_path, exc)
         result = {
             "success": False,
             "checked_at": now_iso(),
@@ -312,7 +340,8 @@ def main() -> int:
             "handoff": str(handoff_path),
             "project_root": args.project_root,
             "design_status": "",
-            "errors": [f"invalid JSON: {exc}"],
+            "errors": [f"invalid JSON: {exc}; rewrite the file with a JSON serializer such as json.dump(..., ensure_ascii=False) instead of hand-editing quoted strings"],
+            "json_error": error_detail,
             "warnings": [],
         }
 

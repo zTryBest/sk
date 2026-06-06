@@ -2,6 +2,33 @@
 
 本文件保存 workflow-orchestrator 的精确文件协议。主 `SKILL.md` 只保留调度规则；需要 schema 时再读取本文件。
 
+## JSON 写入安全
+
+所有 `*.json` 和 `*.jsonl` 文件都必须通过结构化 JSON API 写入，不能手工拼接 JSON 文本。常见错误是字符串里包含双引号，例如 `When 点击"连接测试"`，如果直接写进 JSON 字符串会破坏文件。
+
+推荐写法：
+
+```python
+import json
+from pathlib import Path
+
+data = {
+    "acceptance_criteria": [
+        'Given 配置已保存，When 点击"连接测试"，Then 显示测试结果'
+    ]
+}
+
+path = Path("requirement-handoff.json")
+path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+json.load(path.open(encoding="utf-8"))
+```
+
+禁止写法：
+
+```text
+"Given 配置已保存，When 点击"连接测试"，Then 显示测试结果"
+```
+
 ## 运行目录选择
 
 - 如果已知 `product_id` 和 `product_version`，使用 `<项目根目录>/requirements/<product_id-product_version>/`。
