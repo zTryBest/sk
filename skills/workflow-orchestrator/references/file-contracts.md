@@ -12,6 +12,7 @@
 
 ```text
 workflow-state.json
+workflow-input.json
 decisions.jsonl
 worker-prompt.md
 worker-result.json
@@ -35,6 +36,9 @@ external-result.json
 {
   "schema_version": "1.0",
   "workflow_goal": "",
+  "workflow_input": "workflow-input.json",
+  "input_source_type": "ticket_url|manual_text|document_file|mixed|goal_only",
+  "input_sources_count": 1,
   "run_id": "",
   "project_root": "",
   "artifact_dir": "",
@@ -55,6 +59,39 @@ external-result.json
   "history": []
 }
 ```
+
+## workflow-input.json
+
+`workflow-input.json` 是 requirement-analysis 的初始输入交接文件，避免 worker 依赖主 session 聊天历史判断 Mode A/Mode B。
+
+```json
+{
+  "schema_version": "1.0",
+  "source_type": "ticket_url|manual_text|document_file|mixed|goal_only",
+  "goal": "",
+  "sources": [
+    {
+      "type": "ticket_url",
+      "value": "https://..."
+    },
+    {
+      "type": "manual_text",
+      "content": "用户直接描述或粘贴的需求"
+    },
+    {
+      "type": "document_file",
+      "path": "D:/path/to/requirement.docx"
+    }
+  ],
+  "created_at": ""
+}
+```
+
+分流规则：
+
+- `ticket_url`：requirement-analysis 按 Mode A 执行。
+- `manual_text`、`document_file`、`goal_only`：requirement-analysis 按 Mode B 执行。
+- `mixed`：先处理 URL/文档证据，再合并直接文本中的补充说明；冲突时转澄清问题。
 
 ## pending-questions.json
 

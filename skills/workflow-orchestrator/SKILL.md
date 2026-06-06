@@ -16,6 +16,7 @@ description: >
 - 脚本是本 skill 的内部实现工具。主流程需要时自动定位当前 `workflow-orchestrator` skill 目录下的 `scripts/workflow_orchestrator.py` 并调用。
 - 不要猜固定安装路径，例如 `C:\Users\.claude`、`~/.claude` 或项目根目录下的 `.claude/skills/workflow-orchestrator`。只能从当前已加载的 `workflow-orchestrator/SKILL.md` 所在目录定位脚本。
 - 执行脚本前必须做安全检查：目标文件存在，开头是 Python 脚本，例如 `#!/usr/bin/env python3`，第二行可为 `# -*- coding: utf-8 -*-`。如果开头是 `---`、`name:`、`description:` 或中文 skill 描述，说明定位到了 `SKILL.md` 或安装损坏，必须停止并报告，不要继续用 Python 执行。
+- 初始化时要把用户输入写入 `workflow-input.json`。Ticket URL 使用 `--url`/`--ticket-url`，直接需求文本使用 `--input-text`/`--requirement`，本地文档使用 `--input-file`/`--document`；只有自然语言 `--goal` 时也必须按 Mode B 交给 requirement-analysis。
 - 当前仓库只启用 `requirement-analysis` 和 `design-phase` 两个阶段。`design-phase` 通过 validator 后，workflow 标记为 `COMPLETED`，不要继续启动原型、编码或自测阶段。
 
 ## 核心契约

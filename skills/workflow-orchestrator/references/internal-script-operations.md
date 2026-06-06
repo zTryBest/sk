@@ -12,7 +12,7 @@
 ## 内部调用表
 
 ```text
-python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py init --goal "<目标>"
+python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py init --goal "<目标>" [--url "<ticket URL>"] [--input-text "<直接需求文本>"] [--input-file "<需求文档路径>"]
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py prompt --state <artifact_dir>/workflow-state.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py step --state <artifact_dir>/workflow-state.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py run-loop --state <artifact_dir>/workflow-state.json
@@ -24,6 +24,13 @@ python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py metric
 ```
 
 主流程应优先内部调用 `run-loop`。它会自动执行当前阶段并记录结果。默认不跨阶段全自动继续；阶段完成且 validator 通过后，会写入阶段边界确认问题并停在 `NEED_USER_INPUT`。只有内部显式配置 `auto_advance_stages=true` 时才自动进入下一阶段。
+
+初始化输入规则：
+
+- 用户给 ticket URL 时，内部使用 `--url` 或 `--ticket-url`，脚本写入 `workflow-input.json(source_type=ticket_url)`。
+- 用户直接描述需求时，内部使用 `--input-text` 或仅把完整需求放入 `--goal`，脚本写入 `workflow-input.json(source_type=manual_text|goal_only)`。
+- 用户给本地需求文档时，内部使用 `--input-file` 或 `--document`，脚本写入 `workflow-input.json(source_type=document_file)`，worker 会被授予文档所在目录的读取权限。
+- 不要让用户手动执行这些命令；它们只是主流程内部接口。
 
 ## 状态含义
 

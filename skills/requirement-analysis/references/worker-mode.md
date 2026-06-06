@@ -4,7 +4,8 @@
 
 ## 执行规则
 
-- 先读取 `workflow-state.json`、`decisions.jsonl`、`worker-checkpoint.json`、`external-result.json` 和已有输入材料。
+- 先读取 `workflow-state.json`、`workflow-input.json`、`decisions.jsonl`、`worker-checkpoint.json`、`external-result.json` 和已有输入材料。
+- 根据 `workflow-input.json.source_type` 分流：`ticket_url` 走 Mode A；`manual_text`、`document_file`、`goal_only` 走 Mode B；`mixed` 先处理 URL/文档证据，再合并直接文本补充。
 - 如果存在 `worker-checkpoint.json`，且 `decisions.jsonl` 或 `external-result.json` 已满足其 `required_inputs`，必须从 `resume_from` 继续。
 - 不要重复 `completed_steps` 中已经完成的抓取、分析、确认或写文件动作。
 - 如果不存在可恢复 checkpoint，按 Phase 1-5 顺序执行。

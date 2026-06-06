@@ -18,6 +18,7 @@ description: >
 - `product_id` / 平台名称 和 `product_version` / 平台版本是强制项。缺失时先阻塞确认，不能继续分析。
 - 直连人工模式下，所有用户交互都必须使用 `AskQuestion`，包括缺信息、澄清、输出路径确认和阶段确认。
 - `worker_mode: true` 时不能直接使用 `AskQuestion`。需要人工确认时写 `pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)` 后停止。
+- orchestrator worker 模式下必须先读取 `workflow-input.json`。`ticket_url` 走 Mode A；`manual_text`、`document_file`、`goal_only` 走 Mode B。
 - 不要把功能项只按页面或 CRUD 拆解；必须同时分析触发来源、输入来源、输出去向、数据对象、状态流转、异常场景和平台依赖。
 - 不要把“定制实现”等同于“不依赖平台”。只要需求需要读取、写入、订阅、校验、展示、关联或补全平台既有对象、事件、规则、状态、权限或配置，就必须记录平台依赖。
 - 对通知、推送、发送、分派、审批、抄送、派单、升级、授权、订阅、触达等动作，必须识别“目标对象解析”：作用到谁/什么对象、目标从哪里来、如何过滤、如何取得联系方式或标识。
@@ -79,7 +80,7 @@ description: >
 
 当 prompt、`workflow-state.json` 或用户明确指令包含 `worker_mode: true` 时，进入 worker 模式。
 
-- 第一动作读取 `workflow-state.json`、`decisions.jsonl`、`worker-checkpoint.json`、`external-result.json` 和已有输入材料。
+- 第一动作读取 `workflow-state.json`、`workflow-input.json`、`decisions.jsonl`、`worker-checkpoint.json`、`external-result.json` 和已有输入材料。
 - 如果 checkpoint 已满足恢复条件，从 `resume_from` 继续，不重复 `completed_steps`。
 - 如果没有 checkpoint，按 Phase 1-5 顺序执行。
 - 需要用户确认或主流程外部动作时，写 checkpoint、pending/external-action、worker-result 后停止。

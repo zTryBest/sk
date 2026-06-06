@@ -177,6 +177,63 @@ def state_path_from_artifact(artifact_dir: Path) -> Path:
     return artifact_dir / "workflow-state.json"
 
 
+def build_initial_input(args: argparse.Namespace) -> dict[str, Any]:
+    sources: list[dict[str, Any]] = []
+    if getattr(args, "url", None):
+        sources.append({"type": "ticket_url", "value": args.url})
+    if getattr(args, "input_text", None):
+        sources.append({"type": "manual_text", "content": args.input_text})
+    if getattr(args, "input_file", None):
+        sources.append({"type": "document_file", "path": str(Path(args.input_file).expanduser().resolve())})
+
+    requested_type = getattr(args, "source_type", "auto") or "auto"
+    if requested_type == "ticket_url" and not any(source.get("type") == "ticket_url" for source in sources):
+        raise SystemExit("--source-type ticket_url requires --url or --ticket-url")
+    if requested_type == "document_file" and not any(source.get("type") == "document_file" for source in sources):
+        raise SystemExit("--source-type document_file requires --input-file or --document")
+    if requested_type in {"manual_text", "goal_only"} and not sources:
+        sources.append({"type": "manual_text", "content": args.goal, "from": "goal"})
+
+    if requested_type != "auto":
+        source_type = requested_type
+    elif len(sources) > 1:
+        source_type = "mixed"
+    elif sources:
+        source_type = sources[0]["type"]
+    else:
+        source_type = "goal_only"
+        sources.append({"type": "manual_text", "content": args.goal, "from": "goal"})
+
+    return {
+        "schema_version": "1.0",
+        "source_type": source_type,
+        "goal": args.goal,
+        "sources": sources,
+        "created_at": now_iso(),
+    }
+
+
+def initial_input_path(state: dict[str, Any]) -> Path:
+    return Path(state["artifact_dir"]) / state.get("workflow_input", "workflow-input.json")
+
+
+def input_access_dirs(state: dict[str, Any]) -> list[Path]:
+    data = read_json(initial_input_path(state), {})
+    if not isinstance(data, dict):
+        return []
+    dirs: list[Path] = []
+    for source in data.get("sources", []):
+        if not isinstance(source, dict) or source.get("type") != "document_file":
+            continue
+        path_text = source.get("path")
+        if not path_text:
+            continue
+        path = Path(path_text).expanduser()
+        if path.exists():
+            dirs.append(path.resolve().parent)
+    return dirs
+
+
 def load_state(path: Path) -> dict[str, Any]:
     data = read_json(path)
     if not isinstance(data, dict):
@@ -254,6 +311,7 @@ def make_worker_prompt(state: dict[str, Any]) -> str:
     stage = state["current_stage"]
     decisions_log = artifact_dir / state.get("decisions_log", "decisions.jsonl")
     workflow_goal = state.get("workflow_goal", "")
+    workflow_input = initial_input_path(state)
 
     prior_handoff = state.get("latest_handoff") or ""
     stage_skill = resolve_stage_skill(project_root, stage)
@@ -295,7 +353,9 @@ artifact_dir: {artifact_dir}
     if stage == "requirement-analysis":
         stage_specific_notes = """
 阶段特别注意：
-- 如果 workflow_goal 或输入材料中包含 ticket URL，必须按 requirement-analysis/SKILL.md 的 Mode A 执行。
+- 必须先读取 workflow-input.json，并根据其中的 source_type/sources 选择 requirement-analysis 的输入模式。
+- source_type=ticket_url 或 sources 中有 ticket_url 时，按 requirement-analysis 的 Mode A 执行。
+- source_type=manual_text、document_file、goal_only 或只有自然语言需求时，按 requirement-analysis 的 Mode B 执行。
 - WebFetch 或轻量抓取失败、跳转 SSO、403、超时或内容为空时，必须自动切换到 Playwright MCP 或浏览器抓取；不要把轻量抓取失败当作阶段失败。
 - 只有需要用户完成 SSO 登录、缺少平台名称/版本、或存在关键澄清点时，才写 pending-questions.json。
 """
@@ -340,6 +400,7 @@ workflow_goal: {workflow_goal}
 
 必须读取的运行文件：
 - workflow-state: {state_path}
+- workflow_input: {workflow_input}
 - decisions_log: {decisions_log}
 - prior_handoff: {prior_handoff or "(requirement-analysis 首次执行可没有 prior_handoff)"}
 
@@ -385,10 +446,14 @@ def command_init(args: argparse.Namespace) -> int:
     run_id = args.run_id or _dt.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     artifact_dir = Path(args.artifact_dir).resolve() if args.artifact_dir else default_artifact_dir(project_root, run_id)
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    initial_input = build_initial_input(args)
 
     state = {
         "schema_version": "1.0",
         "workflow_goal": args.goal,
+        "workflow_input": "workflow-input.json",
+        "input_source_type": initial_input["source_type"],
+        "input_sources_count": len(initial_input.get("sources", [])),
         "run_id": run_id,
         "project_root": str(project_root),
         "artifact_dir": str(artifact_dir),
@@ -410,7 +475,8 @@ def command_init(args: argparse.Namespace) -> int:
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
-    add_history(state, "initialized", {"stage": args.stage})
+    write_json(artifact_dir / "workflow-input.json", initial_input)
+    add_history(state, "initialized", {"stage": args.stage, "input_source_type": initial_input["source_type"]})
     state_path = state_path_from_artifact(artifact_dir)
     write_json(state_path, state)
     (artifact_dir / "decisions.jsonl").touch(exist_ok=True)
@@ -520,6 +586,7 @@ def record_worker_result(state_path: Path, result_path: Path) -> dict[str, Any]:
             "worker-run-metrics.json",
             "worker-cli-output.log",
             "worker-prompt.md",
+            "workflow-input.json",
             "pending-questions.json",
             "worker-checkpoint.json",
             "external-action.json",
@@ -613,6 +680,9 @@ def command_status(args: argparse.Namespace) -> int:
     external_result_path = artifact_dir / "external-result.json"
     summary = {
         "workflow_goal": state.get("workflow_goal"),
+        "workflow_input": str(initial_input_path(state)),
+        "input_source_type": state.get("input_source_type", ""),
+        "input_sources_count": state.get("input_sources_count", 0),
         "artifact_dir": state.get("artifact_dir"),
         "current_stage": state.get("current_stage"),
         "current_phase": state.get("current_phase"),
@@ -903,6 +973,7 @@ def run_worker_once(
         Path(state["project_root"]).resolve(),
         artifact_dir.resolve(),
         stage_skill.parent.resolve(),
+        *input_access_dirs(state),
     ]:
         if path not in access_dirs:
             access_dirs.append(path)
@@ -1126,6 +1197,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_init = sub.add_parser("init", help="Initialize a workflow state directory.")
     p_init.add_argument("--goal", required=True)
+    p_init.add_argument("--url", "--ticket-url", dest="url", help="Initial requirement ticket URL. Stored in workflow-input.json for requirement-analysis Mode A.")
+    p_init.add_argument("--input-text", "--requirement", dest="input_text", help="Initial requirement text. Stored in workflow-input.json for requirement-analysis Mode B.")
+    p_init.add_argument("--input-file", "--document", dest="input_file", help="Initial requirement document path. Stored in workflow-input.json for requirement-analysis Mode B.")
+    p_init.add_argument("--source-type", default="auto", choices=["auto", "ticket_url", "manual_text", "document_file", "mixed", "goal_only"], help="Override initial input source type. Default infers from --url/--input-text/--input-file/--goal.")
     p_init.add_argument("--project-root")
     p_init.add_argument("--artifact-dir")
     p_init.add_argument("--run-id")
