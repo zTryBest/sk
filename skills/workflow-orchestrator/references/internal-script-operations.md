@@ -16,6 +16,7 @@ python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py init -
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py prompt --state <artifact_dir>/workflow-state.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py step --state <artifact_dir>/workflow-state.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py run-loop --state <artifact_dir>/workflow-state.json
+python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py auto-decide --state <artifact_dir>/workflow-state.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py record-result --state <artifact_dir>/workflow-state.json --result <artifact_dir>/worker-result.json
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py add-decision --state <artifact_dir>/workflow-state.json --question-batch-id Q-0001 --question-id <id> --selected <key>
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py status --state <artifact_dir>/workflow-state.json
@@ -24,6 +25,8 @@ python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py metric
 ```
 
 主流程应优先内部调用 `run-loop`。它会自动执行当前阶段并记录结果。默认不跨阶段全自动继续；阶段完成且 validator 通过后，会写入阶段边界确认问题并停在 `NEED_USER_INPUT`。只有内部显式配置 `auto_advance_stages=true` 时才自动进入下一阶段。
+
+如果用户明确要求全自动流程，内部使用 `init --full-auto`，并在 `run-loop` 时启用 AI auto-decision。它会在 `NEED_USER_INPUT` 时自动调用 `auto-decide` 等价逻辑，把 AI 决策写入 `decisions.jsonl` 后继续调度 worker。不要用主 session 直接回答 pending questions。
 
 初始化输入规则：
 

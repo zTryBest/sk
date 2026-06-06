@@ -54,6 +54,7 @@
 主 session 精确占用：请在当前 Claude Code 主 session 输入 /context 查看；本 skill 不从脚本读取该数字。
 主 session 边界：本轮只读取了 workflow-state / pending-questions / worker-result / metrics 等轻量文件，未读取大文档或日志。
 worker 隔离：已通过/未通过。证据：claude -p、无 resume/continue、no-session-persistence、metrics 路径。
+AI 自动确认：启用/未启用；已自动确认次数；auto-decisions.jsonl 路径；若停止，说明是否因为外部动作或上限。
 当前阶段状态：READY/NEED_USER_INPUT/COMPLETED/BLOCKED。
 ```
 

@@ -58,6 +58,20 @@ DEFAULT_WORKER_ALLOWED_TOOLS = ",".join([
     "Bash(py *)",
 ])
 
+DEFAULT_AUTO_DECISION_ALLOWED_TOOLS = ",".join([
+    "Read",
+    "Glob",
+    "Grep",
+    "LS",
+])
+
+EXTERNAL_ACTION_REQUIRES_MAIN_SESSION = {
+    "BROWSER_LOGIN",
+    "HUMAN_VERIFICATION",
+    "FILE_SELECTION",
+    "EXTERNAL_SYSTEM_OPERATION",
+}
+
 DEFAULT_WORKER_SUBAGENTS = {
     "workflow-requirement-researcher": {
         "description": "Read-only researcher for requirement-analysis. Use for high-volume ticket, document, web, or codebase exploration that would flood the worker context.",
@@ -123,6 +137,15 @@ def append_jsonl(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(data, ensure_ascii=False) + "\n")
+
+
+def append_jsonl_all(path: Path, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def copy_if_exists(src: Path, dest: Path) -> None:
@@ -469,6 +492,11 @@ def command_init(args: argparse.Namespace) -> int:
         "retry_count": 0,
         "max_retries": args.max_retries,
         "auto_advance_stages": bool(args.auto_advance),
+        "full_auto": bool(args.full_auto),
+        "auto_confirm_mode": "ai" if args.full_auto or args.auto_confirm else "manual",
+        "auto_decision_rounds": args.auto_decision_rounds,
+        "max_auto_decisions": args.max_auto_decisions,
+        "auto_decision_count": 0,
         "worker_subagents_enabled": bool(args.enable_worker_subagents),
         "worker_subagents": stage_subagent_names(args.stage) if args.enable_worker_subagents else [],
         "history": [],
@@ -497,31 +525,43 @@ def command_prompt(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_add_decision(args: argparse.Namespace) -> int:
-    state_path = Path(args.state).resolve()
+def add_decision_to_state(
+    state_path: Path,
+    *,
+    question_batch_id: str,
+    question_id: str,
+    selected: str,
+    free_text: str = "",
+    decision_id: str | None = None,
+    decided_by: str = "user",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    state_path = state_path.resolve()
     state = load_state(state_path)
     artifact_dir = Path(state["artifact_dir"])
     decision = {
-        "decision_id": args.decision_id or f"D-{_dt.datetime.now().strftime('%Y%m%d%H%M%S')}",
-        "question_batch_id": args.question_batch_id,
-        "question_id": args.question_id,
-        "selected": args.selected,
-        "free_text": args.free_text or "",
-        "decided_by": "user",
+        "decision_id": decision_id or f"D-{_dt.datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+        "question_batch_id": question_batch_id,
+        "question_id": question_id,
+        "selected": selected,
+        "free_text": free_text or "",
+        "decided_by": decided_by,
         "decided_at": now_iso(),
     }
+    if metadata:
+        decision.update(metadata)
     append_jsonl(artifact_dir / state.get("decisions_log", "decisions.jsonl"), decision)
     pending_next_stage = state.get("pending_next_stage") or ""
     completed_stage = state.get("completed_stage_waiting_approval") or state.get("current_stage", "")
-    if pending_next_stage and args.question_id == f"workflow.advance_to.{pending_next_stage}":
-        selected = (args.selected or "").lower()
-        if selected in {"approve", "continue", "yes", "y"}:
+    if pending_next_stage and question_id == f"workflow.advance_to.{pending_next_stage}":
+        selected_normalized = (selected or "").lower()
+        if selected_normalized in {"approve", "continue", "yes", "y"}:
             state["current_stage"] = pending_next_stage
             state["current_phase"] = ""
             state["stage_status"] = "READY"
             state["retry_count"] = 0
             add_history(state, "stage_boundary_approved", {"from": completed_stage, "to": pending_next_stage})
-        elif selected in {"revise", "rework", "modify", "no", "n"}:
+        elif selected_normalized in {"revise", "rework", "modify", "no", "n"}:
             state["current_stage"] = completed_stage
             state["current_phase"] = ""
             state["stage_status"] = "READY"
@@ -529,7 +569,7 @@ def command_add_decision(args: argparse.Namespace) -> int:
             add_history(state, "stage_boundary_revision_requested", {"stage": completed_stage, "next_stage": pending_next_stage})
         else:
             state["stage_status"] = "BLOCKED"
-            add_history(state, "stage_boundary_stopped", {"stage": completed_stage, "next_stage": pending_next_stage, "selected": args.selected})
+            add_history(state, "stage_boundary_stopped", {"stage": completed_stage, "next_stage": pending_next_stage, "selected": selected})
         state["pending_next_stage"] = ""
         state["completed_stage_waiting_approval"] = ""
     else:
@@ -537,15 +577,370 @@ def command_add_decision(args: argparse.Namespace) -> int:
     state["pending_questions"] = ""
     add_history(state, "decision_added", decision)
     save_state(state_path, state)
-    print(json.dumps({
+    return {
         "decision": decision,
         "state": str(state_path),
         "stage_status": state["stage_status"],
         "current_stage": state["current_stage"],
         "resume_worker_required": state["stage_status"] == "READY",
         "next_internal_action": "call run-loop; do not execute the stage inside the main session",
-    }, ensure_ascii=False, indent=2))
+    }
+
+
+def command_add_decision(args: argparse.Namespace) -> int:
+    summary = add_decision_to_state(
+        Path(args.state),
+        question_batch_id=args.question_batch_id,
+        question_id=args.question_id,
+        selected=args.selected,
+        free_text=args.free_text or "",
+        decision_id=args.decision_id,
+        decided_by="user",
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
+
+
+def pending_external_action_blocker(state: dict[str, Any]) -> dict[str, Any] | None:
+    artifact_dir = Path(state["artifact_dir"])
+    action_path = artifact_dir / "external-action.json"
+    if not action_path.exists():
+        return None
+    action = read_json(action_path, {})
+    if not isinstance(action, dict):
+        return {"path": str(action_path), "reason": "external-action.json is invalid"}
+    action_type = str(action.get("action_type") or "")
+    action_id = str(action.get("action_id") or "")
+    result = read_json(artifact_dir / "external-result.json", {})
+    result_completed = (
+        isinstance(result, dict)
+        and result.get("action_id") == action_id
+        and result.get("status") == "COMPLETED"
+    )
+    if action.get("status") == "NEED_MAIN_ACTION" and not result_completed:
+        if action_type in EXTERNAL_ACTION_REQUIRES_MAIN_SESSION or action_type:
+            return {
+                "path": str(action_path),
+                "action_id": action_id,
+                "action_type": action_type,
+                "reason": "external action requires main session or real user/environment state",
+            }
+    return None
+
+
+def recommended_or_default_decision(question: dict[str, Any]) -> dict[str, Any] | None:
+    question_id = question.get("id")
+    if not question_id:
+        return None
+    default = question.get("default_if_full_auto")
+    if isinstance(default, str) and default.strip():
+        return {
+            "question_id": question_id,
+            "selected": default.strip(),
+            "free_text": "",
+            "confidence": 0.55,
+            "rationale": "Used default_if_full_auto because AI structured decision was unavailable.",
+            "source": "default_if_full_auto",
+        }
+    options = question.get("options") if isinstance(question.get("options"), list) else []
+    for option in options:
+        if isinstance(option, dict) and option.get("recommended") and option.get("key"):
+            return {
+                "question_id": question_id,
+                "selected": str(option["key"]),
+                "free_text": "",
+                "confidence": 0.5,
+                "rationale": "Used the recommended option because AI structured decision was unavailable.",
+                "source": "recommended_option",
+            }
+    if len(options) == 1 and isinstance(options[0], dict) and options[0].get("key"):
+        return {
+            "question_id": question_id,
+            "selected": str(options[0]["key"]),
+            "free_text": "",
+            "confidence": 0.45,
+            "rationale": "Only one option was available.",
+            "source": "single_option",
+        }
+    return None
+
+
+def fallback_auto_decisions(pending: dict[str, Any]) -> list[dict[str, Any]]:
+    decisions: list[dict[str, Any]] = []
+    for question in pending.get("questions", []):
+        if isinstance(question, dict):
+            decision = recommended_or_default_decision(question)
+            if decision:
+                decisions.append(decision)
+    return decisions
+
+
+def extract_cli_text_result(stdout: str) -> str:
+    parsed = parse_cli_json_output(stdout)
+    result = parsed.get("result")
+    candidates: list[Any] = [result]
+    if isinstance(result, dict):
+        candidates.extend(result.get(key) for key in ["result", "text", "content", "message", "completion"])
+    for item in candidates:
+        if isinstance(item, str) and item.strip():
+            return item.strip()
+        if isinstance(item, list):
+            chunks: list[str] = []
+            for part in item:
+                if isinstance(part, str):
+                    chunks.append(part)
+                elif isinstance(part, dict):
+                    text = part.get("text") or part.get("content")
+                    if isinstance(text, str):
+                        chunks.append(text)
+            if chunks:
+                return "\n".join(chunks).strip()
+    return (stdout or "").strip()
+
+
+def parse_auto_decision_json(text: str) -> dict[str, Any] | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+    candidates = [stripped]
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(stripped[start:end + 1])
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def make_auto_decision_prompt(
+    state: dict[str, Any],
+    pending: dict[str, Any],
+    *,
+    rounds: int,
+    max_decisions: int,
+) -> str:
+    artifact_dir = Path(state["artifact_dir"])
+    return f"""你是 workflow-orchestrator 的全自动确认 worker。你的任务是代替用户回答 pending-questions.json，但只能做可审计、保守、可回滚的决策。
+
+请进行 {rounds} 轮复核后再给最终答案：
+1. 事实复核：列出已知事实、问题、可选项、默认项。
+2. 风险复核：寻找会改变范围、数据来源、权限、安全、外部系统、不可逆动作的风险。
+3. 最终决策：如果证据足够，选择选项；如果不够或涉及真实外部动作，返回 NEED_USER_INPUT。
+
+不要输出隐藏推理链，只输出简短 review_rounds 摘要和最终 JSON。
+
+硬规则：
+- 不要编造用户明确事实。
+- 优先选择 pending question 中的 default_if_full_auto；没有 default 时优先选择 recommended=true 的选项，但必须检查风险。
+- 对 workflow.advance_to.* 阶段边界，如果上一阶段 validation 已成功且没有 open risk，通常选择 approve。
+- 若问题涉及 SSO、人机验证、文件选择、外部系统操作、付款、删除、生产变更、法律/合规承诺，返回 NEED_USER_INPUT。
+- 若选项不足以表达答案，使用 free_text，但 selected 仍应填一个稳定值；实在无法决定则返回 NEED_USER_INPUT。
+- 本批最多回答 {max_decisions} 个问题。
+
+当前轻量状态：
+{json.dumps({
+    "workflow_goal": state.get("workflow_goal"),
+    "current_stage": state.get("current_stage"),
+    "current_phase": state.get("current_phase"),
+    "latest_handoff": state.get("latest_handoff"),
+    "latest_validation": state.get("latest_validation"),
+    "pending_next_stage": state.get("pending_next_stage"),
+    "completed_stage_waiting_approval": state.get("completed_stage_waiting_approval"),
+    "artifact_dir": str(artifact_dir),
+}, ensure_ascii=False, indent=2)}
+
+pending-questions.json:
+{json.dumps(pending, ensure_ascii=False, indent=2)}
+
+只输出 JSON，格式如下：
+{{
+  "status": "AUTO_DECIDED|NEED_USER_INPUT",
+  "reason": "",
+  "review_rounds": [
+    {{"round": 1, "summary": ""}},
+    {{"round": 2, "summary": ""}},
+    {{"round": 3, "summary": ""}}
+  ],
+  "decisions": [
+    {{
+      "question_id": "",
+      "selected": "",
+      "free_text": "",
+      "confidence": 0.0,
+      "rationale": ""
+    }}
+  ]
+}}
+"""
+
+
+def run_auto_decision_worker(
+    state_path: Path,
+    *,
+    rounds: int,
+    max_decisions: int,
+    output_format: str,
+    max_turns: int,
+    permission_mode: str | None,
+    allowed_tools: str | None,
+) -> dict[str, Any]:
+    state_path = state_path.resolve()
+    state = load_state(state_path)
+    artifact_dir = Path(state["artifact_dir"])
+    pending_path = artifact_dir / "pending-questions.json"
+    pending = read_json(pending_path, {})
+    if not isinstance(pending, dict) or not pending.get("questions"):
+        return {"resolved": False, "reason": "pending-questions.json missing or empty", "pending": str(pending_path)}
+
+    blocker = pending_external_action_blocker(state)
+    if blocker:
+        add_history(state, "auto_decision_blocked_by_external_action", blocker)
+        save_state(state_path, state)
+        return {"resolved": False, "reason": "external_action_requires_main_session", "blocker": blocker}
+
+    current_count = int(state.get("auto_decision_count", 0))
+    configured_limit = int(state.get("max_auto_decisions", max_decisions))
+    remaining = max(0, min(max_decisions, configured_limit - current_count))
+    if remaining <= 0:
+        add_history(state, "auto_decision_limit_reached", {"max_auto_decisions": configured_limit})
+        save_state(state_path, state)
+        return {"resolved": False, "reason": "max_auto_decisions reached", "max_auto_decisions": configured_limit}
+
+    prompt = make_auto_decision_prompt(state, pending, rounds=rounds, max_decisions=remaining)
+    prompt_path = artifact_dir / "auto-decision-prompt.md"
+    prompt_path.write_text(prompt, encoding="utf-8")
+
+    decisions: list[dict[str, Any]] = []
+    review_rounds: list[Any] = []
+    reason = ""
+    raw_status = "NEED_USER_INPUT"
+    claude = shutil.which("claude")
+    completed: subprocess.CompletedProcess[str] | None = None
+    log_path = artifact_dir / "auto-decision-cli-output.log"
+    if claude:
+        cmd = [
+            claude,
+            "-p",
+            "--input-format",
+            "text",
+            "--output-format",
+            output_format,
+            "--max-turns",
+            str(max_turns),
+            "--no-session-persistence",
+            "--permission-mode",
+            permission_mode or "default",
+            "--add-dir",
+            str(Path(state["project_root"]).resolve()),
+            "--add-dir",
+            str(artifact_dir.resolve()),
+        ]
+        tool_args = allowed_tools or DEFAULT_AUTO_DECISION_ALLOWED_TOOLS
+        if tool_args:
+            cmd.append("--allowed-tools")
+            cmd.append(tool_args)
+        env = os.environ.copy()
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
+        completed = subprocess.run(
+            cmd,
+            cwd=state["project_root"],
+            input=prompt,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            env=env,
+        )
+        log_path.write_text((completed.stdout or "") + ("\nSTDERR:\n" + completed.stderr if completed.stderr else ""), encoding="utf-8")
+        decision_text = extract_cli_text_result(completed.stdout or "")
+        decision_data = parse_auto_decision_json(decision_text)
+        if isinstance(decision_data, dict):
+            raw_status = str(decision_data.get("status") or "")
+            reason = str(decision_data.get("reason") or "")
+            review_rounds = decision_data.get("review_rounds") if isinstance(decision_data.get("review_rounds"), list) else []
+            raw_decisions = decision_data.get("decisions") if isinstance(decision_data.get("decisions"), list) else []
+            for item in raw_decisions[:remaining]:
+                if isinstance(item, dict) and item.get("question_id") and item.get("selected"):
+                    decisions.append(item)
+
+    if not decisions:
+        fallback = fallback_auto_decisions(pending)[:remaining]
+        if fallback:
+            decisions = fallback
+            raw_status = "AUTO_DECIDED"
+            reason = reason or "AI decision unavailable or empty; used explicit full-auto defaults/recommended options."
+
+    if raw_status != "AUTO_DECIDED" or not decisions:
+        add_history(state, "auto_decision_needs_user", {
+            "reason": reason or "AI auto decision declined or no safe default was available",
+            "prompt": str(prompt_path),
+            "log": str(log_path) if log_path.exists() else "",
+        })
+        save_state(state_path, state)
+        return {
+            "resolved": False,
+            "reason": reason or "AI auto decision declined or no safe default was available",
+            "prompt": str(prompt_path),
+            "log": str(log_path) if log_path.exists() else "",
+            "returncode": completed.returncode if completed else None,
+        }
+
+    question_batch_id = str(pending.get("question_batch_id") or f"AUTO-{_dt.datetime.now().strftime('%Y%m%d%H%M%S')}")
+    applied: list[dict[str, Any]] = []
+    for decision in decisions[:remaining]:
+        summary = add_decision_to_state(
+            state_path,
+            question_batch_id=question_batch_id,
+            question_id=str(decision.get("question_id")),
+            selected=str(decision.get("selected")),
+            free_text=str(decision.get("free_text") or ""),
+            decided_by="ai-auto",
+            metadata={
+                "confidence": decision.get("confidence"),
+                "rationale": decision.get("rationale") or decision.get("reason") or "",
+                "auto_decision_rounds": rounds,
+            },
+        )
+        applied.append(summary["decision"])
+
+    state = load_state(state_path)
+    state["auto_decision_count"] = int(state.get("auto_decision_count", 0)) + len(applied)
+    add_history(state, "auto_decision_applied", {
+        "count": len(applied),
+        "rounds": rounds,
+        "reason": reason,
+        "prompt": str(prompt_path),
+        "log": str(log_path) if log_path.exists() else "",
+    })
+    save_state(state_path, state)
+    append_jsonl_all(artifact_dir / "auto-decisions.jsonl", [
+        {
+            "at": now_iso(),
+            "question_batch_id": question_batch_id,
+            "decision": decision,
+            "review_rounds": review_rounds,
+            "reason": reason,
+            "prompt": str(prompt_path),
+            "log": str(log_path) if log_path.exists() else "",
+            "returncode": completed.returncode if completed else None,
+        }
+        for decision in applied
+    ])
+    return {
+        "resolved": True,
+        "applied_count": len(applied),
+        "decisions": applied,
+        "review_rounds": review_rounds,
+        "reason": reason,
+        "prompt": str(prompt_path),
+        "log": str(log_path) if log_path.exists() else "",
+        "returncode": completed.returncode if completed else None,
+    }
 
 
 def validation_success(validation_path: Path) -> bool | None:
@@ -678,6 +1073,7 @@ def command_status(args: argparse.Namespace) -> int:
     checkpoint_path = artifact_dir / "worker-checkpoint.json"
     external_action_path = artifact_dir / "external-action.json"
     external_result_path = artifact_dir / "external-result.json"
+    auto_decisions_path = artifact_dir / "auto-decisions.jsonl"
     summary = {
         "workflow_goal": state.get("workflow_goal"),
         "workflow_input": str(initial_input_path(state)),
@@ -693,11 +1089,17 @@ def command_status(args: argparse.Namespace) -> int:
         "pending_next_stage": state.get("pending_next_stage", ""),
         "completed_stage_waiting_approval": state.get("completed_stage_waiting_approval", ""),
         "auto_advance_stages": state.get("auto_advance_stages", False),
+        "full_auto": state.get("full_auto", False),
+        "auto_confirm_mode": state.get("auto_confirm_mode", "manual"),
+        "auto_decision_rounds": state.get("auto_decision_rounds", 0),
+        "max_auto_decisions": state.get("max_auto_decisions", 0),
+        "auto_decision_count": state.get("auto_decision_count", 0),
         "worker_subagents_enabled": state.get("worker_subagents_enabled", False),
         "worker_subagents": state.get("worker_subagents", []),
         "checkpoint": str(checkpoint_path) if checkpoint_path.exists() else "",
         "external_action": str(external_action_path) if external_action_path.exists() else "",
         "external_result": str(external_result_path) if external_result_path.exists() else "",
+        "auto_decisions": str(auto_decisions_path) if auto_decisions_path.exists() else "",
         "retry_count": state.get("retry_count"),
         "worker_proof": compact_worker_proof(metrics, metrics_path) if metrics else {
             "worker_used": False,
@@ -797,6 +1199,7 @@ def audit_worker_isolation(state_path: Path) -> dict[str, Any]:
                 str(artifact_dir / "worker-checkpoint.json"),
                 str(artifact_dir / "external-action.json"),
                 str(artifact_dir / "external-result.json"),
+                str(artifact_dir / "auto-decisions.jsonl"),
             ],
             "do_not_read_into_main_context": [
                 str(artifact_dir / "worker-prompt.md"),
@@ -1113,7 +1516,23 @@ def command_run_loop(args: argparse.Namespace) -> int:
     for index in range(args.max_steps):
         state = load_state(state_path)
         status = state.get("stage_status")
-        if status in {"NEED_USER_INPUT", "BLOCKED", "COMPLETED"}:
+        if status == "NEED_USER_INPUT":
+            auto_enabled = bool(args.full_auto or state.get("full_auto") or state.get("auto_confirm_mode") == "ai")
+            if auto_enabled:
+                auto_summary = run_auto_decision_worker(
+                    state_path,
+                    rounds=args.auto_decision_rounds or int(state.get("auto_decision_rounds", 3) or 3),
+                    max_decisions=args.max_auto_decisions or int(state.get("max_auto_decisions", 20) or 20),
+                    output_format=args.output_format,
+                    max_turns=args.auto_decision_max_turns,
+                    permission_mode=args.auto_decision_permission_mode,
+                    allowed_tools=args.auto_decision_allowed_tools,
+                )
+                steps.append({"auto_decision": auto_summary})
+                if auto_summary.get("resolved"):
+                    continue
+            break
+        if status in {"BLOCKED", "COMPLETED"}:
             break
         if status not in {"READY", "VALIDATION_FAILED"}:
             break
@@ -1142,7 +1561,12 @@ def command_run_loop(args: argparse.Namespace) -> int:
         steps.append({"run": run_summary, "record": record_summary})
 
         next_state = load_state(state_path)
-        if next_state.get("stage_status") in {"NEED_USER_INPUT", "BLOCKED", "COMPLETED"}:
+        if next_state.get("stage_status") == "NEED_USER_INPUT":
+            auto_enabled = bool(args.full_auto or next_state.get("full_auto") or next_state.get("auto_confirm_mode") == "ai")
+            if auto_enabled:
+                continue
+            break
+        if next_state.get("stage_status") in {"BLOCKED", "COMPLETED"}:
             break
 
     final_state = load_state(state_path)
@@ -1153,6 +1577,21 @@ def command_run_loop(args: argparse.Namespace) -> int:
         "steps": steps,
     }, ensure_ascii=False, indent=2))
     return 0
+
+
+def command_auto_decide(args: argparse.Namespace) -> int:
+    state = load_state(Path(args.state).resolve())
+    summary = run_auto_decision_worker(
+        Path(args.state),
+        rounds=args.auto_decision_rounds or int(state.get("auto_decision_rounds", 3) or 3),
+        max_decisions=args.max_auto_decisions or int(state.get("max_auto_decisions", 20) or 20),
+        output_format=args.output_format,
+        max_turns=args.auto_decision_max_turns,
+        permission_mode=args.auto_decision_permission_mode,
+        allowed_tools=args.auto_decision_allowed_tools,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0 if summary.get("resolved") else 1
 
 
 def command_metrics(args: argparse.Namespace) -> int:
@@ -1195,6 +1634,13 @@ def build_parser() -> argparse.ArgumentParser:
             help="Allow the worker to spawn stage-scoped read-only subagents for local research/review tasks.",
         )
 
+    def add_auto_decision_options(auto_parser: argparse.ArgumentParser) -> None:
+        auto_parser.add_argument("--auto-decision-rounds", type=int, default=None, help="Review rounds for AI auto decisions. Defaults to state value or 3.")
+        auto_parser.add_argument("--max-auto-decisions", type=int, default=None, help="Maximum AI auto decisions for this command. Defaults to state value or 20.")
+        auto_parser.add_argument("--auto-decision-max-turns", type=int, default=8, help="Max turns for the auto-decision claude -p worker.")
+        auto_parser.add_argument("--auto-decision-permission-mode", default=None, help="Permission mode for the read-only auto-decision worker.")
+        auto_parser.add_argument("--auto-decision-allowed-tools", default=None, help="Allowed tools for the auto-decision worker. Defaults to read-only tools.")
+
     p_init = sub.add_parser("init", help="Initialize a workflow state directory.")
     p_init.add_argument("--goal", required=True)
     p_init.add_argument("--url", "--ticket-url", dest="url", help="Initial requirement ticket URL. Stored in workflow-input.json for requirement-analysis Mode A.")
@@ -1207,6 +1653,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--stage", default="requirement-analysis", choices=STAGES)
     p_init.add_argument("--max-retries", type=int, default=2)
     p_init.add_argument("--auto-advance", action="store_true", help="Automatically enter the next stage after validation succeeds. Off by default.")
+    p_init.add_argument("--full-auto", action="store_true", help="Use AI auto decisions for pending questions. Does not skip real external actions.")
+    p_init.add_argument("--auto-confirm", action="store_true", help="Alias-style switch for AI auto decisions without changing stage auto-advance behavior.")
+    p_init.add_argument("--auto-decision-rounds", type=int, default=3, help="Number of lightweight review rounds requested from the auto-decision worker.")
+    p_init.add_argument("--max-auto-decisions", type=int, default=20, help="Maximum number of AI auto decisions for this workflow run.")
     p_init.add_argument("--enable-worker-subagents", action="store_true", help="Enable stage-scoped read-only subagents inside worker sessions.")
     p_init.set_defaults(func=command_init)
 
@@ -1250,8 +1700,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_loop = sub.add_parser("run-loop", help="Run workers until user input, blocked state, completion, or max steps.")
     p_loop.add_argument("--state", required=True)
     p_loop.add_argument("--max-steps", type=int, default=5)
+    p_loop.add_argument("--full-auto", action="store_true", help="Enable AI auto decisions for this run-loop invocation.")
     add_worker_run_options(p_loop)
+    add_auto_decision_options(p_loop)
     p_loop.set_defaults(func=command_run_loop)
+
+    p_auto = sub.add_parser("auto-decide", help="Resolve current pending-questions.json with an AI auto-decision worker.")
+    p_auto.add_argument("--state", required=True)
+    p_auto.add_argument("--output-format", default="json")
+    add_auto_decision_options(p_auto)
+    p_auto.set_defaults(func=command_auto_decide)
 
     p_metrics = sub.add_parser("metrics", help="Print latest worker-run-metrics.json.")
     p_metrics.add_argument("--state", required=True)

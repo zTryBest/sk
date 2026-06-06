@@ -54,11 +54,54 @@ external-result.json
   "retry_count": 0,
   "max_retries": 2,
   "auto_advance_stages": false,
+  "full_auto": false,
+  "auto_confirm_mode": "manual|ai",
+  "auto_decision_rounds": 3,
+  "max_auto_decisions": 20,
+  "auto_decision_count": 0,
   "worker_subagents_enabled": false,
   "worker_subagents": [],
   "history": []
 }
 ```
+
+## auto-decisions.jsonl
+
+全自动模式下，orchestrator 会在 `NEED_USER_INPUT` 时启动独立 AI auto-decision worker。每条自动确认都会追加到 `auto-decisions.jsonl`，同时以 `decided_by=ai-auto` 写入 `decisions.jsonl`。
+
+```json
+{
+  "at": "",
+  "question_batch_id": "",
+  "decision": {
+    "decision_id": "",
+    "question_id": "",
+    "selected": "",
+    "free_text": "",
+    "decided_by": "ai-auto",
+    "confidence": 0.0,
+    "rationale": "",
+    "auto_decision_rounds": 3
+  },
+  "review_rounds": [
+    {
+      "round": 1,
+      "summary": ""
+    }
+  ],
+  "reason": "",
+  "prompt": "auto-decision-prompt.md",
+  "log": "auto-decision-cli-output.log",
+  "returncode": 0
+}
+```
+
+全自动约束：
+
+- `max_auto_decisions` 限制整个 workflow 的 AI 自动回答总数。
+- `auto_decision_rounds` 要求 auto-decision worker 在输出前做多轮轻量复核。
+- `run-loop --max-steps` 限制 worker/auto-decision 循环次数。
+- 存在未完成 `external-action.json` 时，登录、人机验证、文件选择、外部系统操作等动作不能被 AI 自动确认。
 
 ## workflow-input.json
 
