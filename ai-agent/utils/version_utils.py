@@ -9,12 +9,12 @@ class ParsedVersion:
     raw: str
     normalized: str
     parts: list[int]
+    comparable: bool = True
 
     @property
     def major(self):
         if not self.parts:
             return None
-
         return self.parts[0]
 
 
@@ -22,6 +22,9 @@ def parse_version(version: str) -> ParsedVersion:
     raw = version or ""
     normalized = raw.strip().lower()
     normalized = re.sub(r"^[vV]", "", normalized)
+    comparable = bool(
+        re.fullmatch(r"\d+(?:\.\d+)*", normalized)
+    )
     parts = [
         int(item)
         for item in re.findall(r"\d+", normalized)
@@ -30,7 +33,8 @@ def parse_version(version: str) -> ParsedVersion:
     return ParsedVersion(
         raw=raw,
         normalized=normalized,
-        parts=parts
+        parts=parts,
+        comparable=comparable and bool(parts)
     )
 
 
@@ -56,6 +60,40 @@ def compare_version_parts(
     )
 
 
+def compare_versions(
+        left: str,
+        right: str
+) -> int | None:
+    parsed_left = parse_version(left)
+    parsed_right = parse_version(right)
+    if (
+            not parsed_left.comparable
+            or not parsed_right.comparable
+    ):
+        return None
+
+    return compare_version_parts(
+        parsed_left.parts,
+        parsed_right.parts
+    )
+
+
+def version_lte(
+        left: str,
+        right: str
+) -> bool:
+    compared = compare_versions(left, right)
+    return compared is not None and compared <= 0
+
+
+def version_lt(
+        left: str,
+        right: str
+) -> bool:
+    compared = compare_versions(left, right)
+    return compared is not None and compared < 0
+
+
 def sort_versions(
         versions: list[str]
 ) -> list[str]:
@@ -63,6 +101,20 @@ def sort_versions(
         versions,
         key=lambda item: parse_version(item).parts
     )
+
+
+def _comparable_doc_versions(
+        doc_versions: list[str]
+) -> list[tuple[str, ParsedVersion]]:
+    return [
+        (
+            item,
+            parsed
+        )
+        for item in doc_versions
+        for parsed in [parse_version(item)]
+        if parsed.comparable
+    ]
 
 
 def find_nearest_doc_version(
@@ -73,35 +125,45 @@ def find_nearest_doc_version(
         component_version
     )
 
+    if not requested.comparable:
+        return {
+            "doc_version": None,
+            "match_level": "INCOMPARABLE_VERSION",
+            "confidence": 0.0,
+            "risk": (
+                f"Version {component_version} is not a plain numeric version; "
+                "automatic version fallback is disabled."
+            )
+        }
+
     if not doc_versions:
         return {
             "doc_version": None,
             "match_level": "NO_DOC_VERSION",
             "confidence": 0.0,
-            "risk": "当前组件没有任何接口文档版本。"
+            "risk": "No API document version exists for the current component."
         }
+
+    parsed_docs = _comparable_doc_versions(
+        doc_versions
+    )
 
     exact = [
         item
-        for item in doc_versions
-        if parse_version(item).normalized == requested.normalized
+        for item in parsed_docs
+        if compare_version_parts(
+            item[1].parts,
+            requested.parts
+        ) == 0
     ]
 
     if exact:
         return {
-            "doc_version": exact[0],
+            "doc_version": exact[0][0],
             "match_level": "EXACT",
             "confidence": 1.0,
             "risk": ""
         }
-
-    parsed_docs = [
-        (
-            item,
-            parse_version(item)
-        )
-        for item in doc_versions
-    ]
 
     same_major = [
         item
@@ -132,40 +194,17 @@ def find_nearest_doc_version(
             "match_level": "NEAREST_LOWER_SAME_MAJOR",
             "confidence": 0.75,
             "risk": (
-                f"{component_version} 无精确接口文档，当前使用同 major "
-                f"最近低版本 {selected[0]} 的契约推断。"
-            )
-        }
-
-    higher = [
-        item
-        for item in same_major
-        if compare_version_parts(
-            item[1].parts,
-            requested.parts
-        ) > 0
-    ]
-
-    if higher:
-        selected = min(
-            higher,
-            key=lambda item: item[1].parts
-        )
-        return {
-            "doc_version": selected[0],
-            "match_level": "NEAREST_HIGHER_SAME_MAJOR",
-            "confidence": 0.6,
-            "risk": (
-                f"{component_version} 无精确接口文档，当前使用同 major "
-                f"最近高版本 {selected[0]} 的契约推断，请注意该版本可能包含新增接口。"
+                f"{component_version} has no exact API document; "
+                f"using nearest lower same-major version {selected[0]}."
             )
         }
 
     return {
         "doc_version": None,
-        "match_level": "NO_SAME_MAJOR_DOC_VERSION",
+        "match_level": "NO_COMPATIBLE_DOC_VERSION",
         "confidence": 0.0,
         "risk": (
-            f"{component_version} 无同 major 接口文档，未自动跨 major 兜底。"
+            f"{component_version} has no exact or lower same-major API document. "
+            "Higher document versions are not allowed."
         )
     }

@@ -23,7 +23,7 @@ from utils.identifier_utils import (
     normalize_identifier,
     normalize_identifier_map,
 )
-from utils.version_utils import find_nearest_doc_version
+from utils.version_utils import compare_versions, find_nearest_doc_version
 from vector.factory import create_vector_store
 
 
@@ -365,10 +365,12 @@ class KnowledgeService:
 
         if not components:
             return {
+                "status": "NO_COMPONENT_BASELINE",
                 "product_id": product_id,
                 "product_version": product_version,
                 "requirement_item": requirement_item,
                 "matched_apis": [],
+                "filtered_incompatible_contracts": 0,
                 "missing_info": [
                     "当前平台版本没有组件基线数据，请先维护 product_component_baseline。"
                 ]
@@ -391,6 +393,7 @@ class KnowledgeService:
 
         matched_apis = []
         missing_info = []
+        incompatible_contracts = 0
 
         if self.api_identity_vector_store.count() > 0:
             try:
@@ -422,6 +425,12 @@ class KnowledgeService:
                         component_version=component_versions[identity.component_id],
                         component_source=component_sources[identity.component_id]
                     )
+                    if (
+                            not resolved.api_contract
+                            or resolved.version_compatibility != "PASS"
+                    ):
+                        incompatible_contracts += 1
+                        continue
                     search_content = self.design_repo.build_api_search_content(
                         identity,
                         resolved.api_contract
@@ -480,6 +489,12 @@ class KnowledgeService:
                     component_version=component_versions[identity.component_id],
                     component_source=component_sources[identity.component_id]
                 )
+                if (
+                        not resolved.api_contract
+                        or resolved.version_compatibility != "PASS"
+                ):
+                    incompatible_contracts += 1
+                    continue
                 item = resolved.to_dict()
                 item["score"] = None
                 item["keyword_score"] = self._term_overlap_score(
@@ -497,64 +512,93 @@ class KnowledgeService:
                     break
 
         if not matched_apis:
+            if incompatible_contracts:
+                missing_info.append(
+                    "NO_COMPATIBLE_CONTRACT: candidate API identities exist, "
+                    "but no API contract is compatible with the target component "
+                    "document version. NEED_KB_IMPORT."
+                )
             missing_info.append(
                 "未找到候选 API，请先导入接口文档或提交人工反馈。"
             )
 
+        status = "OK"
+        if not matched_apis:
+            status = (
+                "NO_COMPATIBLE_CONTRACT"
+                if incompatible_contracts
+                else "NO_MATCHED_API"
+            )
+
         return {
+            "status": status,
             "product_id": product_id,
             "product_version": product_version,
             "requirement_item": requirement_item,
             "component_scope": components,
             "matched_apis": matched_apis,
+            "filtered_incompatible_contracts": incompatible_contracts,
             "missing_info": missing_info
         }
 
-    def _resolve_api_contract(
-            self,
+    @staticmethod
+    def _identity_available_reason(
             api_identity: ApiIdentity,
+            target_doc_version: str
+    ) -> str:
+        introduced = api_identity.introduced_doc_version or ""
+        removed = api_identity.removed_doc_version or ""
+
+        if introduced:
+            compared = compare_versions(
+                introduced,
+                target_doc_version
+            )
+            if compared is None:
+                return (
+                    "API introduced_doc_version is not comparable; "
+                    "automatic adoption is disabled."
+                )
+            if compared > 0:
+                return (
+                    f"API exists only from doc_version {introduced}, "
+                    f"but target document version resolves to {target_doc_version}."
+                )
+
+        if removed:
+            compared = compare_versions(
+                removed,
+                target_doc_version
+            )
+            if compared is None:
+                return (
+                    "API removed_doc_version is not comparable; "
+                    "automatic adoption is disabled."
+                )
+            if compared <= 0:
+                return (
+                    f"API was removed at doc_version {removed}, "
+                    f"which is not after target document version {target_doc_version}."
+                )
+
+        return ""
+
+    def _resolved_api_result(
+            self,
+            *,
+            api_identity: ApiIdentity,
+            contract: ApiContract | None,
             component_version: str,
-            component_source: str = "BASELINE"
+            target_doc_version: str | None,
+            doc_resolution: dict,
+            component_source: str,
+            lifecycle_status: str = "UNKNOWN",
+            contract_risk: str = "",
+            version_match_policy: str = "",
+            version_compatibility: str = "FAIL",
+            status: str = "NO_COMPATIBLE_CONTRACT",
+            reason: str = ""
     ) -> ResolvedApiContract:
-        doc_resolution = self.resolve_component_doc_version(
-            component_id=api_identity.component_id,
-            component_version=component_version,
-            segment_id=api_identity.segment_id or ""
-        )
-        doc_version = doc_resolution["resolved_doc_version"]
-        contract = None
-        lifecycle_status = "UNKNOWN"
-        contract_risk = ""
-
-        if doc_version:
-            contract = self.design_repo.get_api_contract(
-                api_identity_id=api_identity.id,
-                doc_version=doc_version
-            )
-            lifecycle_status = self.design_repo.get_api_lifecycle_status(
-                api_identity_id=api_identity.id,
-                doc_version=doc_version
-            )
-
-        if not contract:
-            contract_versions = self.design_repo.list_api_contract_versions(
-                api_identity_id=api_identity.id
-            )
-            fallback = find_nearest_doc_version(
-                component_version=doc_version or component_version,
-                doc_versions=contract_versions
-            )
-            if fallback["doc_version"]:
-                contract = self.design_repo.get_api_contract(
-                    api_identity_id=api_identity.id,
-                    doc_version=fallback["doc_version"]
-                )
-                contract_risk = (
-                    f"目标文档版本 {doc_version} 没有独立契约，"
-                    f"使用契约版本 {fallback['doc_version']} 推断。"
-                )
-                doc_version = fallback["doc_version"]
-
         risks = [
             item
             for item in [
@@ -568,12 +612,146 @@ class KnowledgeService:
             api_identity=api_identity,
             api_contract=contract,
             requested_component_version=component_version,
-            resolved_doc_version=doc_version,
+            resolved_doc_version=target_doc_version,
+            contract_doc_version=(
+                contract.doc_version
+                if contract
+                else None
+            ),
+            version_match_policy=version_match_policy,
+            version_compatibility=version_compatibility,
+            status=status,
+            reason=reason,
             match_level=doc_resolution["match_level"],
             confidence=doc_resolution["confidence"],
             risk=" ".join(risks),
             lifecycle_status=lifecycle_status,
             component_source=component_source
+        )
+
+    def _resolve_api_contract(
+            self,
+            api_identity: ApiIdentity,
+            component_version: str,
+            component_source: str = "BASELINE"
+    ) -> ResolvedApiContract:
+        doc_resolution = self.resolve_component_doc_version(
+            component_id=api_identity.component_id,
+            component_version=component_version,
+            segment_id=api_identity.segment_id or ""
+        )
+        target_doc_version = doc_resolution["resolved_doc_version"]
+        if not target_doc_version:
+            return self._resolved_api_result(
+                api_identity=api_identity,
+                contract=None,
+                component_version=component_version,
+                target_doc_version=target_doc_version,
+                doc_resolution=doc_resolution,
+                component_source=component_source,
+                status="NEED_KB_IMPORT",
+                reason=doc_resolution.get("risk", "")
+            )
+
+        identity_reason = self._identity_available_reason(
+            api_identity,
+            target_doc_version
+        )
+        if identity_reason:
+            return self._resolved_api_result(
+                api_identity=api_identity,
+                contract=None,
+                component_version=component_version,
+                target_doc_version=target_doc_version,
+                doc_resolution=doc_resolution,
+                component_source=component_source,
+                status="NO_COMPATIBLE_CONTRACT",
+                reason=identity_reason
+            )
+
+        exact_contract = self.design_repo.get_api_contract(
+            api_identity_id=api_identity.id,
+            doc_version=target_doc_version
+        )
+        if exact_contract:
+            lifecycle_status = self.design_repo.get_api_lifecycle_status(
+                api_identity_id=api_identity.id,
+                doc_version=target_doc_version
+            )
+            return self._resolved_api_result(
+                api_identity=api_identity,
+                contract=exact_contract,
+                component_version=component_version,
+                target_doc_version=target_doc_version,
+                doc_resolution=doc_resolution,
+                component_source=component_source,
+                lifecycle_status=lifecycle_status,
+                version_match_policy="EXACT",
+                version_compatibility="PASS",
+                status="OK"
+            )
+
+        contract_versions = self.design_repo.list_api_contract_versions(
+            api_identity_id=api_identity.id
+        )
+        fallback = find_nearest_doc_version(
+            component_version=target_doc_version,
+            doc_versions=contract_versions
+        )
+        if not fallback["doc_version"]:
+            high_versions = [
+                version
+                for version in contract_versions
+                if (
+                    compare_versions(
+                        version,
+                        target_doc_version
+                    ) or 0
+                ) > 0
+            ]
+            high_version_note = (
+                f" API exists only in higher doc_version(s): {', '.join(high_versions)}."
+                if high_versions
+                else ""
+            )
+            return self._resolved_api_result(
+                api_identity=api_identity,
+                contract=None,
+                component_version=component_version,
+                target_doc_version=target_doc_version,
+                doc_resolution=doc_resolution,
+                component_source=component_source,
+                status="NO_COMPATIBLE_CONTRACT",
+                reason=(
+                    "No API contract exists at or below target document "
+                    f"version {target_doc_version}.{high_version_note} NEED_KB_IMPORT."
+                )
+            )
+
+        fallback_contract = self.design_repo.get_api_contract(
+            api_identity_id=api_identity.id,
+            doc_version=fallback["doc_version"]
+        )
+        lifecycle_status = self.design_repo.get_api_lifecycle_status(
+            api_identity_id=api_identity.id,
+            doc_version=fallback["doc_version"]
+        )
+        return self._resolved_api_result(
+            api_identity=api_identity,
+            contract=fallback_contract,
+            component_version=component_version,
+            target_doc_version=target_doc_version,
+            doc_resolution=doc_resolution,
+            component_source=component_source,
+            lifecycle_status=lifecycle_status,
+            contract_risk=(
+                f"Target document version {target_doc_version} has no exact "
+                f"contract; using lower compatible contract "
+                f"{fallback['doc_version']}."
+            ),
+            version_match_policy="BACKWARD_COMPATIBLE",
+            version_compatibility="PASS",
+            status="OK"
         )
 
     def get_api_detail(
@@ -597,6 +775,7 @@ class KnowledgeService:
         if not identity:
             return {
                 "found": False,
+                "status": "NOT_FOUND",
                 "message": "未找到接口身份",
                 "api": None
             }
@@ -606,8 +785,20 @@ class KnowledgeService:
             component_version=component_version
         )
 
+        if (
+                not resolved.api_contract
+                or resolved.version_compatibility != "PASS"
+        ):
+            return {
+                "found": False,
+                "status": resolved.status,
+                "reason": resolved.reason,
+                "api": resolved.to_dict()
+            }
+
         return {
             "found": True,
+            "status": resolved.status,
             "api": resolved.to_dict()
         }
 

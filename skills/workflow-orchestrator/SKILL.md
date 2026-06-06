@@ -30,6 +30,7 @@ description: >
 - worker 必须先读对应子 skill 的 `SKILL.md`。子 skill 的业务流程优先，orchestrator 只覆盖交互方式：worker 不能直接问用户，必须写 `pending-questions.json` 后退出。
 - worker 遇到用户确认、SSO、人机验证、文件选择、外部系统操作、长时间人工处理、MCP/浏览器等不能跨进程保存的资源时，必须先写 `worker-checkpoint.json` 和必要的 `external-action.json`，再写 `pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)` 后退出；禁止只写 pending 不写 result。
 - 如果 worker 因 max-turns 被截断但已经留下 `pending-questions.json` 或 `worker-checkpoint.json`，orchestrator 可以自动恢复到 `NEED_USER_INPUT` 或 `READY`。同一 pending/checkpoint 重复恢复超过上限后才标记 `BLOCKED`，避免死循环。
+- 如果 worker 因 max-turns 被截断但已经留下阶段草稿或 handoff Markdown，orchestrator 恢复为 `READY` 并标记 `finalize-recovery`；下一轮只启动收尾 worker 补 `*-handoff.json`、`*-validation.json` 和 `worker-result.json`，主 session 不读取大文档手动收尾。
 - 用户回答或主流程完成外部动作后，主 session 只能写 `decisions.jsonl` 或 `external-result.json`，然后重新调用 `run-loop` 拉起 worker。禁止在主 session 里继续执行 requirement-analysis 或 design-phase。
 - 全自动模式下，主 session 不替 worker 执行业务阶段；它只在 `NEED_USER_INPUT` 时调度 auto-decision worker。auto-decision worker 必须输出可审计决策，不能直接改阶段产物。
 - 重新 `run-loop` 不是恢复同一个进程，而是启动新的隔离 worker。worker 必须根据 `worker-checkpoint.json`、`decisions.jsonl`、`external-result.json` 断点继续，不能重复已经完成的步骤。
@@ -78,6 +79,7 @@ worker prompt 必须包含：
 - 子 skill 优先级声明：除交互方式外，不改写子 skill 的业务阶段、抓取、分析、MCP、文档生成和 validator 规则。
 - 禁止直接 `AskQuestion`；需要用户确认时写 `pending-questions.json`、`worker-checkpoint.json` 和 `worker-result.json(status=NEED_USER_INPUT)`。
 - 阶段完成后必须运行对应 validator，并写 `worker-result.json`。
+- `finalize-recovery` 模式下，worker 只读取已有阶段产物并补齐缺失机器文件；不要重新抓取 URL、重新跑完整需求分析或完整方案设计。
 - 阶段完成且 validator 成功时，worker 直接返回 `STAGE_COMPLETED`；是否进入下一阶段由 orchestrator 在主 session 统一处理。
 
 ## 何时读 References

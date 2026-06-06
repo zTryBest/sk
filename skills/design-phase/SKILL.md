@@ -18,6 +18,7 @@ description: 在需求分析已确认平台名称和平台版本后，进入方�
 - 通知、推送、发送、分派、审批、抄送、派单、升级、授权、订阅、触达等动作必须先解析目标对象来源。
 - 每个最终选中的 API 必须经过 `get_api_detail` 二次确认。
 - 输出方案时必须带 MCP 证据：组件版本、组件段、文档版本、`match_level`、`risk`、请求/响应契约。
+- 低版本组件不能采纳高版本才存在的 API 或契约。最终 API 必须证明 `contract_doc_version <= resolved_doc_version`，并写入版本兼容证据。
 - MCP 为空、契约为空、风险不可接受或版本跨 major 不确定时，停止并询问用户；不要猜。
 
 ## 运行和交互模式
@@ -79,6 +80,7 @@ Phase 详情、状态账本和各阶段输出要求见 `references/phase-details
 - 对 Phase 2.5 产出的每个“平台上下文动作”单独调用 `find_apis_for_requirement`。
 - 检索词必须描述要从平台获取、校验、监听、写回什么，而不是外部动作。
 - 每个候选 Top API 必须调用 `get_api_detail` 二次确认。
+- MCP 返回 `NO_COMPATIBLE_CONTRACT`、`NEED_KB_IMPORT`、版本不可比较或契约版本高于当前组件可用文档版本时，不能采纳为最终 API。
 - MCP 调用记录、候选、采纳/淘汰原因必须写入 `design-handoff.json` 和设计文档。
 - 不要调用旧版搜索类或候选提交类 MCP 工具。
 
@@ -123,6 +125,8 @@ Phase 9 必须在需求交接目录生成：
 - 已调用 `list_products` 和 `list_product_components` 确认平台及组件范围。
 - 每个平台上下文动作都有 MCP 检索任务和调用记录。
 - 每个最终 API 都调用了 `get_api_detail`。
+- 每个最终 API 都在 `design-handoff.json` 中写明 `method`、`api_path`、请求参数/契约和响应结果/契约。
+- 每个最终 API 都在 `design-handoff.json` 中写明 `resolved_doc_version`、`contract_doc_version`、`version_match_policy`、`version_compatibility=PASS`；不得低版本采纳高版本契约。
 - `CUSTOM_CODE`、`EXTERNAL_INTEGRATION`、`HYBRID` 子能力都有非 MCP 设计说明。
 - `design-doc.md`、`design-handoff.json`、`design-validation.json` 已生成到项目 `requirements/` 目录。
 - `design-validation.json.success=true`。

@@ -69,10 +69,13 @@ description: >
 
 按 `references/output-contracts.md` 生成：
 
-- `需求分析.md` 或 `需求分析-草稿.md`
-- `design-phase-handoff.md`
 - `requirement-handoff.json`
 - `requirement-validation.json`
+- `worker-result.json`
+- `需求分析.md` 或 `需求分析-草稿.md`
+- `design-phase-handoff.md`
+
+Phase 5 的写入顺序是机器文件优先：先写 `requirement-handoff.json`，再运行 validator 生成 `requirement-validation.json`，随后尽早写 `worker-result.json`。草稿也必须写 handoff，`source.requirement_status=draft`，并把未解决问题写入 `open_questions`。Markdown 文档和 `design-phase-handoff.md` 可以随后补齐，但不能只写 Markdown 而缺少机器文件。
 
 最终产物必须位于 `<项目根目录>/requirements/<product_id-product_version>/` 或等价产品目录。写入后重新读取，确认不是空文件、不是摘要占位符，并包含功能项、平台依赖、澄清记录和 design-phase 交接上下文。
 
@@ -84,6 +87,7 @@ description: >
 - 如果 checkpoint 已满足恢复条件，从 `resume_from` 继续，不重复 `completed_steps`。
 - 如果没有 checkpoint，按 Phase 1-5 顺序执行。
 - 需要用户确认或主流程外部动作时，写 checkpoint、pending/external-action、worker-result 后停止。
+- 进入 Phase 5 后优先写 `requirement-handoff.json`、`requirement-validation.json` 和 `worker-result.json`；不要等完整 Markdown 全部润色完成后才写 result。
 - 阶段完成且 `requirement-validation.json.success=true` 时，写 `worker-result.json(status=STAGE_COMPLETED)`；是否进入 design-phase 由 orchestrator 处理。
 
 完整 worker 文件协议见 `references/worker-mode.md`。

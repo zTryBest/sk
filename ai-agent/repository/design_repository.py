@@ -16,6 +16,7 @@ from models.design_phase import (
 )
 from repository.postgres_connection import ResilientPostgresConnection
 from utils.identifier_utils import normalize_identifier
+from utils.version_utils import compare_version_parts, parse_version
 
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,152 @@ class DesignRepository:
 
     def ping(self):
         return self.conn.ping()
+
+    def _column_exists(
+            self,
+            table_name: str,
+            column_name: str
+    ) -> bool:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                AND table_name = %s
+                AND column_name = %s
+                """,
+                (
+                    table_name,
+                    column_name
+                )
+            )
+            return cur.fetchone() is not None
+
+    def _has_api_identity_version_columns(self) -> bool:
+        return all(
+            self._column_exists(
+                "api_identity",
+                column_name
+            )
+            for column_name in (
+                "introduced_doc_version",
+                "last_seen_doc_version",
+                "removed_doc_version"
+            )
+        )
+
+    @staticmethod
+    def _version_sort_key(version: str):
+        parsed = parse_version(
+            version
+        )
+        return (
+            parsed.parts
+            if parsed.comparable
+            else []
+        )
+
+    @staticmethod
+    def _min_version(versions: list[str]) -> str:
+        return min(
+            versions,
+            key=DesignRepository._version_sort_key
+        )
+
+    @staticmethod
+    def _max_version(versions: list[str]) -> str:
+        return max(
+            versions,
+            key=DesignRepository._version_sort_key
+        )
+
+    def refresh_api_identity_version_range(
+            self,
+            api_identity_id: int
+    ) -> None:
+        if not self._has_api_identity_version_columns():
+            return
+
+        with self.conn.cursor(
+                cursor_factory=RealDictCursor
+        ) as cur:
+            cur.execute(
+                """
+                SELECT doc_version, status
+                FROM api_lifecycle
+                WHERE api_identity_id=%s
+                """,
+                (api_identity_id,)
+            )
+            rows = cur.fetchall()
+
+        present_versions = []
+        removed_versions = []
+        for row in rows:
+            parsed = parse_version(
+                row["doc_version"]
+            )
+            if not parsed.comparable:
+                continue
+            if row["status"] in ("PRESENT", "DEPRECATED"):
+                present_versions.append(
+                    row["doc_version"]
+                )
+            elif row["status"] == "REMOVED":
+                removed_versions.append(
+                    row["doc_version"]
+                )
+
+        introduced_doc_version = (
+            self._min_version(present_versions)
+            if present_versions
+            else ""
+        )
+        last_seen_doc_version = (
+            self._max_version(present_versions)
+            if present_versions
+            else ""
+        )
+        removed_doc_version = None
+        if removed_versions:
+            if introduced_doc_version:
+                later_removed = [
+                    version
+                    for version in removed_versions
+                    if compare_version_parts(
+                        parse_version(version).parts,
+                        parse_version(introduced_doc_version).parts
+                    ) > 0
+                ]
+                removed_doc_version = (
+                    self._min_version(later_removed)
+                    if later_removed
+                    else None
+                )
+            else:
+                removed_doc_version = self._min_version(
+                    removed_versions
+                )
+
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE api_identity
+                SET introduced_doc_version=%s,
+                    last_seen_doc_version=%s,
+                    removed_doc_version=%s,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (
+                    introduced_doc_version,
+                    last_seen_doc_version,
+                    removed_doc_version,
+                    api_identity_id
+                )
+            )
+        self.conn.commit()
 
     @staticmethod
     def _api_identity_content(api: ApiIdentity) -> str:
@@ -566,6 +713,9 @@ class DesignRepository:
             )
             row_id = cur.fetchone()[0]
         self.conn.commit()
+        self.refresh_api_identity_version_range(
+            api_identity_id
+        )
         return row_id
 
     def list_products(self):
@@ -743,7 +893,10 @@ class DesignRepository:
             api_name=row["api_name"],
             capability_tags=row.get("capability_tags") or [],
             scene=row.get("scene", ""),
-            description=row.get("description", "")
+            description=row.get("description", ""),
+            introduced_doc_version=row.get("introduced_doc_version", ""),
+            last_seen_doc_version=row.get("last_seen_doc_version", ""),
+            removed_doc_version=row.get("removed_doc_version")
         )
 
     @staticmethod
@@ -1192,11 +1345,13 @@ class DesignRepository:
         from utils.version_utils import compare_version_parts, parse_version
 
         requested = parse_version(doc_version)
+        if not requested.comparable:
+            return None
         candidates = []
 
         for version in self.list_api_contract_versions(api_identity_id):
             parsed = parse_version(version)
-            if not parsed.parts:
+            if not parsed.comparable:
                 continue
 
             if (

@@ -66,6 +66,9 @@ class ApiIdentity:
     segment_id: str = ""
     scene: str = ""
     description: str = ""
+    introduced_doc_version: str = ""
+    last_seen_doc_version: str = ""
+    removed_doc_version: str | None = None
     id: int | None = None
 
     def to_dict(self):
@@ -114,6 +117,11 @@ class ResolvedApiContract:
     risk: str
     lifecycle_status: str = "UNKNOWN"
     component_source: str = "BASELINE"
+    contract_doc_version: str | None = None
+    version_match_policy: str = ""
+    version_compatibility: str = "FAIL"
+    status: str = "NO_COMPATIBLE_CONTRACT"
+    reason: str = ""
 
     def to_dict(self):
         return {
@@ -125,9 +133,14 @@ class ResolvedApiContract:
             ),
             "requested_component_version": self.requested_component_version,
             "resolved_doc_version": self.resolved_doc_version,
+            "contract_doc_version": self.contract_doc_version,
+            "version_match_policy": self.version_match_policy,
+            "version_compatibility": self.version_compatibility,
             "match_level": self.match_level,
             "confidence": self.confidence,
             "risk": self.risk,
             "lifecycle_status": self.lifecycle_status,
-            "component_source": self.component_source
+            "component_source": self.component_source,
+            "status": self.status,
+            "reason": self.reason
         }

@@ -366,6 +366,15 @@ ALTER TABLE api_identity
     ADD COLUMN IF NOT EXISTS segment_id TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE api_identity
+    ADD COLUMN IF NOT EXISTS introduced_doc_version TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE api_identity
+    ADD COLUMN IF NOT EXISTS last_seen_doc_version TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE api_identity
+    ADD COLUMN IF NOT EXISTS removed_doc_version TEXT NULL;
+
+ALTER TABLE api_identity
     DROP CONSTRAINT IF EXISTS api_identity_component_id_method_api_path_key;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_api_identity_segment
@@ -373,6 +382,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_api_identity_segment
 
 CREATE INDEX IF NOT EXISTS idx_api_identity_component_segment
     ON api_identity (component_id, segment_id);
+
+CREATE INDEX IF NOT EXISTS idx_api_identity_version_range
+    ON api_identity (component_id, segment_id, introduced_doc_version, removed_doc_version);
 
 CREATE TABLE IF NOT EXISTS api_contract (
     id BIGSERIAL PRIMARY KEY,

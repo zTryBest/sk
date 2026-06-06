@@ -1,284 +1,107 @@
 ---
 name: workflow-orchestrator
 description: >
-  当用户要求在 Claude Code 中自动完成“需求分析、方案设计、原型图设计、前后端编码、自测”的端到端流程，
+  当用户要求在 Claude Code 中阶段式推进“需求分析、方案设计、原型图设计、前后端编码、自测”的端到端流程，
   或提到“主流程”“orchestrator”“worker 模式”“不依赖 auto compact”“一个 session 编排多个阶段”时必须使用。
   本 skill 负责让主 session 只做轻量状态机、用户确认和 worker 调度，阶段执行交给隔离的 Claude Code worker。
 ---
 
 # Workflow Orchestrator
 
-本 skill 用于把长链路交付流程从“一个 Claude Code session 扛完整上下文”改成“一个主 session 编排多个隔离 worker”。
+本 skill 把长链路交付流程拆成“主 session 编排 + 独立 worker 执行”。主 session 只保留当前阶段、状态、问题、用户决策、产物路径和审计摘要；需求分析、方案设计等重工作必须在可审计的 worker 中完成。
 
-主 session 只保留当前阶段、当前 phase、目标、文件路径、用户决策和校验状态；不要把完整需求文档、完整设计文档、MCP 全量日志或代码全文放进主上下文。
+## 先读这个
 
-## 用户入口
+- 用户入口永远是自然语言。不要要求用户手动执行 `workflow_orchestrator.py`，也不要把脚本命令当成下一步操作展示给用户。
+- 脚本是本 skill 的内部实现工具。主流程需要时自动定位当前 `workflow-orchestrator` skill 目录下的 `scripts/workflow_orchestrator.py` 并调用。
+- 不要猜固定安装路径，例如 `C:\Users\.claude`、`~/.claude` 或项目根目录下的 `.claude/skills/workflow-orchestrator`。只能从当前已加载的 `workflow-orchestrator/SKILL.md` 所在目录定位脚本。
+- 执行脚本前必须做安全检查：目标文件存在，开头是 Python 脚本，例如 `#!/usr/bin/env python3`，第二行可为 `# -*- coding: utf-8 -*-`。如果开头是 `---`、`name:`、`description:` 或中文 skill 描述，说明定位到了 `SKILL.md` 或安装损坏，必须停止并报告，不要继续用 Python 执行。
+- 初始化时要把用户输入写入 `workflow-input.json`。Ticket URL 使用 `--url`/`--ticket-url`，直接需求文本使用 `--input-text`/`--requirement`，本地文档使用 `--input-file`/`--document`；只有自然语言 `--goal` 时也必须按 Mode B 交给 requirement-analysis。
+- 内部脚本兼容 `--artifact-dir` 和 `--artifacts-dir`，二者含义相同；`status` 可用 `--state` 或 `--artifact-dir/--artifacts-dir` 定位状态，不要无状态调用。
+- requirement-analysis worker 需要访问 SSO 配置时，orchestrator 必须把用户的 `~/.claude/config` 加入 worker `--add-dir`；如果需要 Playwright/MCP，必须确保 worker 的 allowed tools 和 MCP 配置包含对应 MCP 工具。
+- 用户明确要求“全自动流程”“自动完成所有阶段”“不要人工确认”时，初始化必须使用 `--full-auto`。全自动不是跳过问题，而是由独立 AI auto-decision worker 多轮复核后把答案写入 `decisions.jsonl`。
+- 当前仓库只启用 `requirement-analysis` 和 `design-phase` 两个阶段。`design-phase` 通过 validator 后，workflow 标记为 `COMPLETED`，不要继续启动原型、编码或自测阶段。
 
-用户入口永远是自然语言触发本 skill，例如：
+## 核心契约
 
-```text
-根据这个 ticket URL 开始全流程
-执行需求分析、方案设计、原型、编码和自测
-用 workflow-orchestrator 跑完整自动化流程
-```
-
-不要要求用户手动执行 `workflow_orchestrator.py` 命令。脚本命令是本 skill 的内部实现工具，由 Claude Code 主流程在需要时自动运行。
-
-当用户触发本 skill 后，Claude Code 主流程必须：
-
-1. 自动调用 `workflow_orchestrator.py init` 初始化状态，或读取已有 `workflow-state.json`。
-2. 自动调用 `workflow_orchestrator.py run-loop` 推进阶段。
-3. 如果 run-loop 停在 `NEED_USER_INPUT`，读取 `pending-questions.json` 并用 `AskQuestion` 问用户。
-4. 用户回答后，自动调用 `workflow_orchestrator.py add-decision` 写入 `decisions.jsonl`。
-5. 再自动调用 `run-loop` 继续执行。
-
-只有在调试、排障或用户明确要求看底层命令时，才展示脚本命令。
-
-## 核心原则
-
-- 不依赖 auto compact。自动压缩只能作为兜底，不能作为流程正确性的前提。
-- 用户只和主 session 交互；不要要求用户手动新建 session。
-- 用户也不需要手动运行 orchestrator 脚本；主 session 负责调用脚本和 worker。
-- 每个阶段由独立 worker 执行。worker 可以用 `claude -p` 启动，也可以由主 session 生成 worker prompt 后交给可用的隔离执行工具。
-- 阶段之间只通过文件交接：`*-handoff.json`、`*-validation.json`、`worker-result.json`。
-- 涉及人工确认时，worker 不直接提问，不等待用户输入；它必须写 `pending-questions.json` 和 `worker-result.json`，状态为 `NEED_USER_INPUT`，然后退出。
-- 主 session 读取 `pending-questions.json`，用 `AskQuestion` 问用户；用户回答写入 `decisions.jsonl`，再拉起 worker 继续。
-- validator 是硬门禁。上一个阶段 validation 不通过，不能进入下一阶段。
-- 子 skill 的业务流程规则优先于 orchestrator。orchestrator 只负责调度和交互转发，不能替代 requirement-analysis、design-phase 等子 skill 的抓取、分析、MCP、文档生成规则。
-
-## 文件契约
-
-每个流程运行目录必须包含：
-
-```text
-workflow-state.json
-decisions.jsonl
-worker-prompt.md
-worker-result.json
-pending-questions.json
-worker-run-metrics.json
-```
-
-运行目录选择：
-
-- 如果已知 `product_id` 和 `product_version`，使用 `<项目根目录>/requirements/<product_id-product_version>/`。
-- 如果还不知道产品和版本，先使用 `<项目根目录>/requirements/_workflow/<run_id>/`。
-- requirement-analysis 完成后，如果产物位于新的产品目录，更新 `workflow-state.json.artifact_dir` 指向产品目录。
-
-### workflow-state.json
-
-```json
-{
-  "schema_version": "1.0",
-  "workflow_goal": "",
-  "run_id": "",
-  "project_root": "",
-  "artifact_dir": "",
-  "current_stage": "requirement-analysis",
-  "current_phase": "",
-  "stage_status": "READY|RUNNING|NEED_USER_INPUT|VALIDATION_FAILED|COMPLETED|BLOCKED",
-  "latest_handoff": "",
-  "latest_validation": "",
-  "pending_questions": "",
-  "decisions_log": "decisions.jsonl",
-  "retry_count": 0,
-  "max_retries": 2,
-  "history": []
-}
-```
-
-### pending-questions.json
-
-```json
-{
-  "status": "NEED_USER_INPUT",
-  "stage": "",
-  "phase": "",
-  "question_batch_id": "",
-  "questions": [
-    {
-      "id": "",
-      "question": "",
-      "options": [
-        {
-          "key": "",
-          "label": "",
-          "recommended": true,
-          "description": ""
-        }
-      ],
-      "impact": "",
-      "default_if_full_auto": ""
-    }
-  ],
-  "known_facts": [],
-  "blocking_reason": ""
-}
-```
-
-### decisions.jsonl
-
-每行一个用户决策：
-
-```json
-{"decision_id":"D-0001","question_batch_id":"Q-0001","question_id":"architecture.service_shape","selected":"springboot-monolith","free_text":"","decided_by":"user","decided_at":"2026-06-05T12:00:00+08:00"}
-```
-
-### worker-result.json
-
-```json
-{
-  "status": "STAGE_COMPLETED|NEED_USER_INPUT|VALIDATION_FAILED|BLOCKED",
-  "stage": "",
-  "phase": "",
-  "artifact_dir": "",
-  "handoff": "",
-  "validation": "",
-  "pending_questions": "",
-  "summary": "",
-  "next_action": ""
-}
-```
-
-### worker-run-metrics.json
-
-`run-worker` 命令启动 `claude -p` 后必须写该文件，用于证明 worker 真的被单独调用，并记录可从 CLI JSON 输出中提取的用量字段：
-
-```json
-{
-  "is_worker": true,
-  "worker_invocation": "claude -p",
-  "session_isolation": "new claude -p invocation; no --resume or --continue is used by the orchestrator",
-  "started_at": "",
-  "ended_at": "",
-  "duration_seconds": 0,
-  "returncode": 0,
-  "command": [],
-  "prompt_path": "",
-  "log_path": "",
-  "stdout_json_parsed": true,
-  "session_id": "",
-  "num_turns": 0,
-  "total_cost_usd": 0,
-  "usage": {}
-}
-```
-
-如果 CLI 当前版本没有在 JSON 中返回 token usage，`usage` 可能为空；这种情况下仍可通过 `worker_invocation`、`command`、`started_at`、`duration_seconds`、`returncode` 和独立输出文件证明 worker 是独立 `claude -p` 调用。
-
-## 阶段顺序
-
-默认阶段顺序：
-
-1. `requirement-analysis`
-2. `design-phase`
-3. `prototype-design`
-4. `implementation`
-5. `self-test`
-
-当前仓库已经实现前两个阶段的 handoff 和 validator。后续阶段未实现时，orchestrator 必须把状态标记为 `BLOCKED`，说明缺少对应 skill 或 validator，不要假装继续。
+- 不依赖 auto compact。上下文控制靠文件交接和 worker 隔离，自动压缩只能兜底。
+- 每个阶段默认必须由脚本通过 `claude -p` 启动独立 worker。没有可审计隔离 runner 时，标记 `BLOCKED`，不要让主 session 代替 worker 执行子 skill。
+- 阶段之间只通过文件交接：`*-handoff.json`、`*-validation.json`、`worker-result.json`、`workflow-state.json`、`decisions.jsonl`。
+- worker 必须先读对应子 skill 的 `SKILL.md`。子 skill 的业务流程优先，orchestrator 只覆盖交互方式：worker 不能直接问用户，必须写 `pending-questions.json` 后退出。
+- worker 遇到用户确认、SSO、人机验证、文件选择、外部系统操作、长时间人工处理、MCP/浏览器等不能跨进程保存的资源时，必须先写 `worker-checkpoint.json` 和必要的 `external-action.json`，再写 `pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)` 后退出；禁止只写 pending 不写 result。
+- 如果 worker 因 max-turns 被截断但已经留下 `pending-questions.json` 或 `worker-checkpoint.json`，orchestrator 可以自动恢复到 `NEED_USER_INPUT` 或 `READY`。同一 pending/checkpoint 重复恢复超过上限后才标记 `BLOCKED`，避免死循环。
+- 如果 worker 因 max-turns 被截断但已经留下阶段草稿或 handoff Markdown，orchestrator 恢复为 `READY` 并标记 `finalize-recovery`；下一轮只启动收尾 worker 补 `*-handoff.json`、`*-validation.json` 和 `worker-result.json`，主 session 不读取大文档手动收尾。
+- 用户回答或主流程完成外部动作后，主 session 只能写 `decisions.jsonl` 或 `external-result.json`，然后重新调用 `run-loop` 拉起 worker。禁止在主 session 里继续执行 requirement-analysis 或 design-phase。
+- 全自动模式下，主 session 不替 worker 执行业务阶段；它只在 `NEED_USER_INPUT` 时调度 auto-decision worker。auto-decision worker 必须输出可审计决策，不能直接改阶段产物。
+- 重新 `run-loop` 不是恢复同一个进程，而是启动新的隔离 worker。worker 必须根据 `worker-checkpoint.json`、`decisions.jsonl`、`external-result.json` 断点继续，不能重复已经完成的步骤。
+- 阶段边界默认需要用户确认。需求分析完成且验证通过后，orchestrator 必须停在 `NEED_USER_INPUT`，确认需求产物可作为方案设计输入后，才能进入 `design-phase`。
+- 全自动模式可以由 AI 自动确认阶段边界，但必须受 `auto_decision_rounds`、`max_auto_decisions` 和 `run-loop --max-steps` 限制；达到上限就停下来，不继续循环。
+- SSO、人机验证、文件选择、外部系统操作、生产变更等需要真实外部状态的动作不能被 AI 伪确认，即使在全自动模式下也必须停在 `NEED_USER_INPUT`。
 
 ## 主流程
 
 1. 初始化或读取 `workflow-state.json`。
-2. 检查 `stage_status`：
-   - `READY`: 生成 worker prompt 并启动 worker。
-   - `NEED_USER_INPUT`: 读取 `pending-questions.json`，使用 `AskQuestion` 问用户。
-   - `VALIDATION_FAILED`: 若 `retry_count < max_retries`，生成修复 worker prompt；否则停止并报告失败。
-   - `COMPLETED`: 结束全流程。
-   - `BLOCKED`: 停止并说明缺失能力或外部阻塞。
-3. 用户回答后，把答案追加到 `decisions.jsonl`，清空 pending 状态，再生成下一次 worker prompt。
-4. worker 结束后，读取 `worker-result.json`，更新 `workflow-state.json`。如果阶段完成且 validation 成功，自动进入下一阶段；不要询问用户“是否继续”。
-5. 只向主上下文汇报摘要、路径和下一步；不要粘贴完整文档。
+2. 内部调用 `run-loop` 推进当前阶段；不要在主 session 手写或执行 worker prompt。
+3. 每次 `run-loop` 后内部调用 `audit`，确认最近一次阶段是否由独立 `claude -p` worker 执行。
+4. 如果状态是 `NEED_USER_INPUT`，只读取轻量文件：`pending-questions.json`、`worker-checkpoint.json`、必要的 `external-action.json` 和 `external-result.json`。
+5. 如果存在 `external-action.json`，主 session 按其中的 `action_type` 完成外部动作，并把结果写入 `external-result.json`。
+6. 如果需要问用户，使用 `AskQuestion` 转述 `pending-questions.json` 中的问题；不要重新发明问题。每次最多问 3 个。
+7. 用户回答后写入 `decisions.jsonl`，再内部调用 `run-loop`。如果 `add-decision` 输出 `resume_worker_required=true`，下一步必须是重新调用 worker，而不是主 session 继续阶段工作。
+8. 全自动模式下，如果状态是 `NEED_USER_INPUT` 且没有外部动作阻塞，内部调用 `auto-decide` 或带全自动参数的 `run-loop`，由 AI 写入 `decisions.jsonl` 后继续 worker。
+9. 只向用户汇报状态、问题、产物路径、worker 审计结论、auto-decision 摘要和下一步，不粘贴完整需求/设计文档或 worker 日志。
 
-## Worker Prompt 要求
+## 主 Session 边界
+
+主 session 可以读取和总结：
+
+- `workflow-state.json` 的轻量状态。
+- `worker-result.json` 的 `status`、`summary`、`next_action` 和产物路径。
+- `pending-questions.json` 中需要问用户的问题。
+- `decisions.jsonl` 中用户刚回答的决策。
+- `status` / `audit` / `metrics` 的 worker 证明摘要。
+
+主 session 默认不要读取：
+
+- `worker-prompt.md`
+- `worker-cli-output.log`
+- 完整需求文档、完整设计文档、MCP 全量日志
+- 子 skill 的完整正文，除非正在排障或修改 skill 本身
+
+如果主 session 发现必须读取这些大文件才能继续，说明阶段执行没有正确封装；应重新调度 worker 或标记 `BLOCKED`，不要把子 skill 的工作搬回主 session。
+
+## Worker Prompt 最小要求
 
 worker prompt 必须包含：
 
 - `worker_mode: true`
-- 当前 stage 和 artifact_dir。
-- 必须读取的 handoff、state、decisions 文件。
-- 第一动作必须读取对应阶段的 `SKILL.md`，并声明子 skill 规则优先。
-- 明确说明 worker 模式只把 `AskQuestion` 替换成 `pending-questions.json`，不改变子 skill 的其他流程。
-- 禁止直接 AskQuestion；需要人工确认时写 `pending-questions.json` 并退出。
-- 完成阶段后必须运行对应 validator。
-- 最后必须写 `worker-result.json`。
-- 阶段完成且 validation 成功时，worker 必须直接返回 `STAGE_COMPLETED`；不要输出“是否继续下一阶段”的问题。
+- 当前 `stage`、`artifact_dir` 和必须读取的 state/handoff/decisions 文件。
+- 对应子 skill 的 `SKILL.md` 路径，并要求 worker 第一件事读取它。
+- 子 skill 优先级声明：除交互方式外，不改写子 skill 的业务阶段、抓取、分析、MCP、文档生成和 validator 规则。
+- 禁止直接 `AskQuestion`；需要用户确认时写 `pending-questions.json`、`worker-checkpoint.json` 和 `worker-result.json(status=NEED_USER_INPUT)`。
+- 阶段完成后必须运行对应 validator，并写 `worker-result.json`。
+- `finalize-recovery` 模式下，worker 只读取已有阶段产物并补齐缺失机器文件；不要重新抓取 URL、重新跑完整需求分析或完整方案设计。
+- 阶段完成且 validator 成功时，worker 直接返回 `STAGE_COMPLETED`；是否进入下一阶段由 orchestrator 在主 session 统一处理。
 
-worker prompt 示例：
+## 何时读 References
 
-```text
-worker_mode: true
-stage: design-phase
-artifact_dir: D:\github\ai-agent\requirements\PVIA-2.4.0
-
-请使用 .claude/skills/design-phase/SKILL.md。
-第一件事必须读取并理解 .claude/skills/design-phase/SKILL.md；子 skill 规则优先，本 prompt 只覆盖交互方式。
-先读取 workflow-state.json、decisions.jsonl 和 requirement-handoff.json。
-不要直接向用户提问；如需用户确认，写 pending-questions.json 和 worker-result.json(status=NEED_USER_INPUT) 后停止。
-如果已有 decisions 覆盖该问题，使用 decisions 继续执行。
-阶段完成后生成 design-doc.md、design-handoff.json、design-validation.json，并运行 validate_design.py。
-最后写 worker-result.json。
-```
-
-### 子 skill 优先级
-
-worker 不是“泛化任务代理”，而是“带隔离上下文的阶段执行器”。因此：
-
-- requirement-analysis worker 必须完整遵守 `requirement-analysis/SKILL.md`，包括 ticket URL 的级联抓取策略：轻量抓取失败后自动切换 Playwright MCP 或浏览器抓取；只有 SSO 登录、缺产品版本或关键澄清点才回传主流程。
-- design-phase worker 必须完整遵守 `design-phase/SKILL.md`，包括读取 `requirement-handoff.json`、区分执行动作/平台上下文动作、MCP 透明日志、`get_api_detail` 二次确认。
-- 如果 worker 没有读取子 skill 就开始执行，视为流程错误；应停止并写 `worker-result.json(status=BLOCKED)`。
-- 如果子 skill 与 orchestrator prompt 冲突，只有交互方式以 orchestrator 为准：直接 `AskQuestion` 改为写 `pending-questions.json`。其他流程必须听子 skill。
-
-## 内部脚本
-
-以下 bundled script 只供 Claude Code 主流程内部调用，用于管理文件状态；不要把它作为用户操作入口：
-
-```text
-python .claude/skills/workflow-orchestrator/scripts/workflow_orchestrator.py init --goal "<目标>"
-python .claude/skills/workflow-orchestrator/scripts/workflow_orchestrator.py prompt --state <artifact_dir>/workflow-state.json
-python .claude/skills/workflow-orchestrator/scripts/workflow_orchestrator.py step --state <artifact_dir>/workflow-state.json
-python .claude/skills/workflow-orchestrator/scripts/workflow_orchestrator.py run-loop --state <artifact_dir>/workflow-state.json
-python .claude/skills/workflow-orchestrator/scripts/workflow_orchestrator.py record-result --state <artifact_dir>/workflow-state.json --result <artifact_dir>/worker-result.json
-python .claude/skills/workflow-orchestrator/scripts/workflow_orchestrator.py add-decision --state <artifact_dir>/workflow-state.json --question-batch-id Q-0001 --question-id <id> --selected <key>
-python .claude/skills/workflow-orchestrator/scripts/workflow_orchestrator.py status --state <artifact_dir>/workflow-state.json
-python .claude/skills/workflow-orchestrator/scripts/workflow_orchestrator.py metrics --state <artifact_dir>/workflow-state.json
-```
-
-如果 `claude` CLI 可用，可以使用脚本的 `run-worker` 命令自动启动 worker；如果不可用，生成 `worker-prompt.md` 后由主流程使用可用的隔离执行方式运行。
-
-主流程应优先内部调用 `run-loop`，它会自动执行当前阶段、记录结果并流转到下一阶段，直到遇到以下情况才停：
-
-- `NEED_USER_INPUT`: 需要主流程用 `AskQuestion` 问用户。
-- `BLOCKED`: 缺少阶段 skill、MCP 不可用或外部阻塞。
-- `COMPLETED`: 全流程完成。
-- 达到 `--max-steps`。
-
-不要把“是否进入下一阶段”作为人工确认点；阶段之间默认自动流转，只有业务事实、技术决策或风险选择才需要用户确认。不要让用户自己复制执行这些命令。
-
-在 Windows cmd / PowerShell 中查看 worker 是否真的运行：
-
-```text
-python .claude\skills\workflow-orchestrator\scripts\workflow_orchestrator.py status --state <artifact_dir>\workflow-state.json
-python .claude\skills\workflow-orchestrator\scripts\workflow_orchestrator.py metrics --state <artifact_dir>\workflow-state.json
-type <artifact_dir>\worker-run-metrics.json
-type <artifact_dir>\worker-cli-output.log
-```
-
-交互式主 session 的实时上下文用量由 Claude Code 自身显示：在正在运行的 `claude` 交互界面里输入 `/context`。`claude -p` worker 是非交互调用，不能在运行中输入 `/context`；用 `worker-run-metrics.json` 看该 worker 调用的结构化用量和审计信息。
+- 需要精确 JSON schema、目录选择或文件契约时，读 `references/file-contracts.md`。
+- 用户询问“主线程上下文占用”“worker 是否独立上下文”“到底有没有用 worker”或需要审计报告时，读 `references/context-worker-audit.md`。
+- 需要判断 worker 内部是否启用 subAgent、或用户问“subAgent 放在 worker 里有没有必要”时，读 `references/worker-subagents.md`。
+- 需要解释或排障全自动确认时，读 `references/full-auto.md`。
+- 需要排障脚本定位、Windows 编码、`claude -p` 权限、内部命令或 run-loop 行为时，读 `references/internal-script-operations.md`。
+- 后续要增加原型、编码、自测等阶段时，读 `references/extending-stages.md`。
 
 ## AskQuestion 规则
 
-主流程需要问用户时必须使用 `AskQuestion`。问题来自 `pending-questions.json`，不要重新发明问题。
-
-每次最多问 3 个问题；如果 `pending-questions.json` 中超过 3 个，按顺序分批。用户回答后立即写入 `decisions.jsonl`，再继续调度 worker。
+主流程需要问用户时必须使用 `AskQuestion`。问题来自 `pending-questions.json`，每次最多问 3 个；如果超过 3 个，按顺序分批。用户回答后立刻写入 `decisions.jsonl`，再继续调度 worker。
 
 ## 完成检查
 
-- [ ] 主 session 没有读取或复述完整需求/设计/代码大文档。
-- [ ] 每个阶段都有 `worker-result.json`。
-- [ ] 通过 `run-worker` 执行的阶段都有 `worker-run-metrics.json`。
-- [ ] 需要人工确认时，问题来自 `pending-questions.json`，回答写入 `decisions.jsonl`。
-- [ ] 每个阶段完成前对应 validation 为 `success=true`。
-- [ ] `workflow-state.json` 的 `current_stage`、`stage_status`、`latest_handoff`、`latest_validation` 已更新。
-- [ ] 不依赖 auto compact 才能继续。
+- 主 session 没有读取或复述完整需求/设计/代码大文档。
+- 每个阶段都有 `worker-result.json`。
+- 通过 worker 执行的阶段都有 `worker-run-metrics.json`。
+- worker 被截断时，如果存在 pending/checkpoint，状态已通过恢复机制处理；如果同一恢复签名反复出现，流程会停止而不是无限加 turns。
+- 需要人工确认时，问题来自 `pending-questions.json`，回答写入 `decisions.jsonl`。
+- 每个阶段完成前对应 validation 为 `success=true`。
+- `workflow-state.json` 的 `current_stage`、`stage_status`、`latest_handoff`、`latest_validation` 已更新。
+- worker 审计结论能说明最近一次阶段是否由独立 `claude -p` 调用完成。

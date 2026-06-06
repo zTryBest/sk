@@ -341,6 +341,162 @@ def add_history(state: dict[str, Any], event: str, detail: dict[str, Any] | None
     history.append({"at": now_iso(), "event": event, "detail": detail or {}})
 
 
+def unique_paths(paths: list[Path]) -> list[Path]:
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path.absolute()
+        key = str(resolved).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(resolved)
+    return unique
+
+
+def newest_mtime(paths: list[Path]) -> float:
+    mtimes: list[float] = []
+    for path in paths:
+        try:
+            if path.exists():
+                mtimes.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    return max(mtimes) if mtimes else 0.0
+
+
+def candidate_output_dirs(state: dict[str, Any]) -> list[Path]:
+    project_root = Path(state.get("project_root") or ".").resolve()
+    artifact_dir = Path(state.get("artifact_dir") or ".").resolve()
+    candidates = [artifact_dir]
+    for key in ("latest_handoff", "latest_validation"):
+        value = state.get(key)
+        if value:
+            try:
+                candidates.append(Path(str(value)).resolve().parent)
+            except OSError:
+                pass
+    requirements_dir = project_root / "requirements"
+    if requirements_dir.exists():
+        try:
+            children = [path for path in requirements_dir.iterdir() if path.is_dir() and path.name != "_workflow"]
+        except OSError:
+            children = []
+        children.sort(key=lambda path: newest_mtime(list(path.glob("*"))), reverse=True)
+        candidates.extend(children[:40])
+    return unique_paths(candidates)
+
+
+def partial_finalize_signature(candidate: dict[str, Any]) -> str:
+    missing = ",".join(candidate.get("missing_outputs", []))
+    return f"finalize:{candidate.get('stage', '')}:{candidate.get('directory', '')}:{missing}"
+
+
+def find_partial_finalize_candidate(state: dict[str, Any]) -> dict[str, Any] | None:
+    stage = state.get("current_stage")
+    if stage == "requirement-analysis":
+        evidence_names = ["需求分析-草稿.md", "需求分析.md", "design-phase-handoff.md", "requirement-handoff.json"]
+        required_names = ["requirement-handoff.json", "requirement-validation.json"]
+        validator = "requirement-analysis/scripts/validate_requirement.py"
+    elif stage == "design-phase":
+        evidence_names = ["design-doc.md", "design-handoff.json", "design-phase-state.md"]
+        required_names = ["design-handoff.json", "design-validation.json"]
+        validator = "design-phase/scripts/validate_design.py"
+    else:
+        return None
+
+    artifact_dir = Path(state.get("artifact_dir") or ".").resolve()
+    result_path = artifact_dir / "worker-result.json"
+    candidates: list[dict[str, Any]] = []
+    for directory in candidate_output_dirs(state):
+        existing = [directory / name for name in evidence_names if (directory / name).exists()]
+        if not existing:
+            continue
+        missing = [str(directory / name) for name in required_names if not (directory / name).exists()]
+        if not result_path.exists():
+            missing.append(str(result_path))
+        if not missing:
+            continue
+        handoff_name = required_names[0]
+        validation_name = required_names[1]
+        candidate = {
+            "stage": stage,
+            "directory": str(directory),
+            "existing_files": [str(path) for path in existing],
+            "missing_outputs": missing,
+            "handoff": str(directory / handoff_name),
+            "validation": str(directory / validation_name),
+            "validator": validator,
+            "worker_result": str(result_path),
+            "detected_at": now_iso(),
+            "_mtime": newest_mtime(existing),
+        }
+        candidates.append(candidate)
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item.get("_mtime", 0.0), reverse=True)
+    selected = dict(candidates[0])
+    selected.pop("_mtime", None)
+    return selected
+
+
+def make_finalize_recovery_notes(state: dict[str, Any], result_path: Path) -> str:
+    candidate = state.get("recovery_finalize")
+    if not isinstance(candidate, dict):
+        return ""
+    stage = state.get("current_stage", "")
+    project_root = Path(state.get("project_root") or ".").resolve()
+    stage_skill_dir = resolve_stage_skill(project_root, stage).parent
+    directory = candidate.get("directory", "")
+    existing_files = "\n".join(f"- {path}" for path in candidate.get("existing_files", [])) or "- (none)"
+    missing_outputs = "\n".join(f"- {path}" for path in candidate.get("missing_outputs", [])) or "- (none)"
+    validator = candidate.get("validator", "")
+    handoff = candidate.get("handoff", "")
+    validation = candidate.get("validation", "")
+    if stage == "requirement-analysis":
+        validator_script = stage_skill_dir / "scripts" / "validate_requirement.py"
+        stage_steps = f"""
+- 只读取已有的需求草稿 / design-phase-handoff 和 requirement-analysis 的 output-contracts，不要重新抓取 URL、不要重跑完整需求分析。
+- 先补齐或修正 `{handoff}`。如果仍有 open questions，`source.requirement_status` 必须是 `draft`，并把问题写入 `open_questions`。
+- 运行：`python "{validator_script}" --handoff "{handoff}" --output "{validation}" --project-root "{project_root}"`
+- 如果仍是草稿或存在 open questions，写 pending-questions.json 和 `{result_path}`，status=NEED_USER_INPUT。
+- 如果已经是 final 且 validation success=true，写 `{result_path}`，status=STAGE_COMPLETED。
+"""
+    elif stage == "design-phase":
+        validator_script = stage_skill_dir / "scripts" / "validate_design.py"
+        stage_steps = f"""
+- 只读取已有 design-doc/design-handoff 草稿和 design-phase 的 output-contracts，不要重新执行完整 Phase 0-9，除非缺少的字段无法从已有产物恢复。
+- 补齐或修正 `{handoff}`。凡是选中的基线 API，必须包含 `method`、`api_path`、`get_api_detail_called=true`、请求参数/契约、响应结果/契约、`resolved_doc_version`、`contract_doc_version`、`version_match_policy` 和 `version_compatibility=PASS`。禁止低版本组件采纳高版本 API 契约。
+- 运行：`python "{validator_script}" --handoff "{handoff}" --output "{validation}" --project-root "{project_root}"`
+- 如果缺少 API 选择、架构决策、数据库类型或其他用户决策，写 pending-questions.json 和 `{result_path}`，status=NEED_USER_INPUT。
+- 如果 validation success=true，写 `{result_path}`，status=STAGE_COMPLETED。
+"""
+    else:
+        stage_steps = "- 当前阶段没有 finalize-recovery 规则，写 BLOCKED result。\n"
+    return f"""
+RECOVERY_FINALIZE_MODE:
+上一次 worker 已经写出部分阶段产物，但没有写出可被 orchestrator 记录的 worker-result.json。当前 worker 只做收尾，不重跑完整阶段。
+
+已有产物：
+{existing_files}
+
+缺失或需要确认的输出：
+{missing_outputs}
+
+收尾目录：{directory}
+validator: {validator}
+worker-result 必须写到：{result_path}
+worker-result.artifact_dir 必须写为：{directory}
+
+收尾规则：
+{stage_steps}
+"""
+
+
 def write_stage_boundary_questions(
     artifact_dir: Path,
     *,
@@ -449,6 +605,7 @@ artifact_dir: {artifact_dir}
 - WebFetch 或轻量抓取失败、跳转 SSO、403、超时或内容为空时，必须自动切换到 Playwright MCP 或浏览器抓取；不要把轻量抓取失败当作阶段失败。
 - 先读取 ~/.claude/config/internal-urls.yaml；如果 sso_username、sso_password、sso_selectors 和 Playwright/MCP 能力可用，必须在 worker 内自动登录，不要把 SSO 回传主流程。
 - 只有缺少 SSO 配置、MCP/浏览器不可用、自动登录失败、需要人机验证、缺少平台名称/版本、或存在关键澄清点时，才写 pending-questions.json。
+- 进入产物阶段时必须先写 requirement-handoff.json，再运行/生成 requirement-validation.json，并尽早写 worker-result.json；Markdown 文档可以随后补齐。草稿也必须有 machine handoff。
 """
     elif stage == "design-phase":
         stage_specific_notes = """
@@ -456,7 +613,10 @@ artifact_dir: {artifact_dir}
 - 必须优先读取 requirement-handoff.json；不要依赖 workflow_goal 或聊天历史补事实。
 - MCP 只检索平台上下文动作，不检索外部执行动作。
 - 架构、中间件、实现方式分类、MCP 检索计划、候选 API 选择等确认点，在 worker 模式下都写 pending-questions.json。
+- 选中基线 API 后必须调用详情并把接口路径、请求参数/契约、响应结果/契约写入 design-handoff.json；只写 API 名称或组件名不算可交接。
+- 选中基线 API 后必须写入版本兼容证据：resolved_doc_version、contract_doc_version、version_match_policy、version_compatibility=PASS；contract_doc_version 不能高于 resolved_doc_version。
 """
+    finalize_notes = make_finalize_recovery_notes(state, result_path)
     subagent_names = state.get("worker_subagents") or []
     if state.get("worker_subagents_enabled") and subagent_names:
         subagent_notes = f"""
@@ -496,6 +656,8 @@ workflow_goal: {workflow_goal}
 - prior_handoff: {prior_handoff or "(requirement-analysis 首次执行可没有 prior_handoff)"}
 
 {stage_specific_notes}
+
+{finalize_notes}
 
 {subagent_notes}
 
@@ -1090,6 +1252,7 @@ def record_worker_result(state_path: Path, result_path: Path) -> dict[str, Any]:
     elif status == "BLOCKED":
         state["stage_status"] = "BLOCKED"
     elif status == "STAGE_COMPLETED":
+        state.pop("recovery_finalize", None)
         validation_path = Path(state["latest_validation"]) if state.get("latest_validation") else artifact_dir / VALIDATION_BY_STAGE.get(state["current_stage"], "")
         if validation_path and not validation_path.is_absolute():
             validation_path = artifact_dir / validation_path
@@ -1183,7 +1346,8 @@ def recover_missing_worker_result(state_path: Path, run_summary: dict[str, Any])
     checkpoint = read_json(checkpoint_path, {})
     pending = pending if isinstance(pending, dict) else {}
     checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
-    signature = recovery_signature(pending, checkpoint)
+    finalize_candidate = find_partial_finalize_candidate(state) if not pending and not checkpoint else None
+    signature = partial_finalize_signature(finalize_candidate) if finalize_candidate else recovery_signature(pending, checkpoint)
     allowed, repeat_count = increment_recovery_guard(state, signature)
     if not allowed:
         state["stage_status"] = "BLOCKED"
@@ -1250,6 +1414,7 @@ def recover_missing_worker_result(state_path: Path, run_summary: dict[str, Any])
         state["stage_status"] = "READY"
         state["current_phase"] = str(checkpoint.get("phase") or state.get("current_phase", ""))
         state["pending_questions"] = ""
+        state.pop("recovery_finalize", None)
         reason = "checkpoint found without worker-result; recovered to READY"
         write_json(result_path, {
             "status": "RECOVERED_READY",
@@ -1276,6 +1441,46 @@ def recover_missing_worker_result(state_path: Path, run_summary: dict[str, Any])
             "stage_status": "READY",
             "reason": reason,
             "checkpoint": str(checkpoint_path),
+            "synthetic_worker_result": str(result_path),
+        }
+
+    if finalize_candidate:
+        state["stage_status"] = "READY"
+        state["current_phase"] = "finalize-recovery"
+        state["pending_questions"] = ""
+        state["recovery_finalize"] = finalize_candidate
+        handoff_path = Path(str(finalize_candidate.get("handoff", "")))
+        validation_path = Path(str(finalize_candidate.get("validation", "")))
+        if handoff_path.exists():
+            state["latest_handoff"] = str(handoff_path)
+        if validation_path.exists():
+            state["latest_validation"] = str(validation_path)
+        reason = "partial stage artifacts found; recovered to READY for finalize-only worker"
+        write_json(result_path, {
+            "status": "RECOVERED_READY",
+            "stage": state.get("current_stage", ""),
+            "phase": "finalize-recovery",
+            "artifact_dir": str(artifact_dir),
+            "handoff": state.get("latest_handoff", ""),
+            "validation": state.get("latest_validation", ""),
+            "pending_questions": "",
+            "summary": reason,
+            "next_action": "run-loop starts a finalize-only worker; do not complete the stage in the main session",
+        })
+        add_history(state, "missing_worker_result_recovered", {
+            "reason": reason,
+            "signature": signature,
+            "repeat_count": repeat_count,
+            "finalize_candidate": finalize_candidate,
+            "run": run_summary,
+        })
+        save_state(state_path, state)
+        return {
+            "recovered": True,
+            "state": str(state_path),
+            "stage_status": "READY",
+            "reason": reason,
+            "finalize_candidate": finalize_candidate,
             "synthetic_worker_result": str(result_path),
         }
 
@@ -1612,10 +1817,14 @@ def run_worker_once(
     worker_allowed_tools = allowed_tools or os.environ.get("CLAUDE_WORKER_ALLOWED_TOOLS") or DEFAULT_WORKER_ALLOWED_TOOLS
     stage_skill = resolve_stage_skill(Path(state["project_root"]), state["current_stage"])
     config_dir = user_claude_config_dir()
+    finalize_dir = None
+    if isinstance(state.get("recovery_finalize"), dict) and state["recovery_finalize"].get("directory"):
+        finalize_dir = Path(str(state["recovery_finalize"]["directory"])).resolve()
     access_dirs = []
     for path in [
         Path(state["project_root"]).resolve(),
         artifact_dir.resolve(),
+        finalize_dir,
         stage_skill.parent.resolve(),
         config_dir.resolve() if config_dir.exists() else None,
         *input_access_dirs(state),
