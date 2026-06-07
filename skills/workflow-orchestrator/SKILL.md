@@ -19,8 +19,9 @@ description: >
 - 初始化时要把用户输入写入 `workflow-input.json`。Ticket URL 使用 `--url`/`--ticket-url`，直接需求文本使用 `--input-text`/`--requirement`，本地文档使用 `--input-file`/`--document`；如果没有显式 `--goal`，脚本会根据输入自动生成默认目标。只有自然语言 `--goal` 时也必须按 Mode B 交给 requirement-analysis。
 - 初始化默认复用同一项目、同一输入、同一阶段下最近的活动 workflow，避免纠错时重复创建 `_workflow/<run_id>` 目录。只有用户明确要求新建或内部确实需要并行 workflow 时，才使用 `--no-reuse-existing`、`--run-id` 或 `--artifact-dir`。
 - 内部脚本兼容 `--artifact-dir` 和 `--artifacts-dir`，二者含义相同；`status` 可用 `--state` 或 `--artifact-dir/--artifacts-dir` 定位状态，不要无状态调用。
-- requirement-analysis worker 需要访问 SSO 配置时，orchestrator 必须把用户的 `~/.claude/config` 加入 worker `--add-dir`；如果需要 Playwright/MCP，必须确保 worker 的 allowed tools 和 MCP 配置包含对应 MCP 工具。
 - 用户明确要求“全自动流程”“自动完成所有阶段”“不要人工确认”时，初始化必须使用 `--full-auto`。全自动不是跳过问题，而是由独立 AI auto-decision worker 多轮复核后把答案写入 `decisions.jsonl`。
+- 用户没有说明全自动或人工阶段时，默认确认策略是：`requirement-analysis` 需要人工确认，其他阶段使用 AI 自动确认。也就是需求澄清、需求产物进入方案设计前必须停给用户；方案设计及后续阶段的普通确认点默认由 auto-decision worker 审计后确认。
+- 用户可以自然语言指定人工确认阶段，例如“需求分析和方案设计都人工确认”“只有方案设计人工确认”“需求分析人工，后面自动”。主流程初始化时映射为 `--manual-confirm-stages <stage-list>`；如果用户指定某阶段自动确认，映射为 `--ai-confirm-stages <stage-list>`。
 - 当前仓库只启用 `requirement-analysis` 和 `design-phase` 两个阶段。`design-phase` 通过 validator 后，workflow 标记为 `COMPLETED`，不要继续启动原型、编码或自测阶段。
 
 ## 核心契约
@@ -37,8 +38,8 @@ description: >
 - 用户回答或主流程完成外部动作后，主 session 只能写 `decisions.jsonl` 或 `external-result.json`，然后重新调用 `run-loop` 拉起 worker。禁止在主 session 里继续执行 requirement-analysis 或 design-phase。
 - 全自动模式下，主 session 不替 worker 执行业务阶段；它只在 `NEED_USER_INPUT` 时调度 auto-decision worker。auto-decision worker 必须输出可审计决策，不能直接改阶段产物。
 - 重新 `run-loop` 不是恢复同一个进程，而是启动新的隔离 worker。worker 必须根据 `worker-checkpoint.json`、`decisions.jsonl`、`external-result.json` 断点继续，不能重复已经完成的步骤。
-- 阶段边界默认需要用户确认。需求分析完成且验证通过后，orchestrator 必须停在 `NEED_USER_INPUT`，确认需求产物可作为方案设计输入后，才能进入 `design-phase`。
-- 全自动模式可以由 AI 自动确认阶段边界，但必须受 `auto_decision_rounds`、`max_auto_decisions` 和 `run-loop --max-steps` 限制；达到上限就停下来，不继续循环。
+- 阶段边界是否人工确认由 `manual_confirmation_stages` 决定。默认只有 `requirement-analysis` 在阶段内部确认点和阶段完成边界停给用户；其他阶段的确认点由 AI 自动确认。
+- 全自动模式下 `manual_confirmation_stages=[]`，每个阶段都无需人工确认，但仍必须受 `auto_decision_rounds`、`max_auto_decisions` 和 `run-loop --max-steps` 限制；达到上限就停下来，不继续循环。
 - SSO、人机验证、文件选择、外部系统操作、生产变更等需要真实外部状态的动作不能被 AI 伪确认，即使在全自动模式下也必须停在 `NEED_USER_INPUT`。
 
 ## 主流程

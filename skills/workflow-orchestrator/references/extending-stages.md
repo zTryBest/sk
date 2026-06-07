@@ -53,6 +53,6 @@
 
 ## 阶段边界
 
-默认策略是阶段完成后停在 `NEED_USER_INPUT`，由用户确认是否进入下一阶段。只有主流程内部显式设置 `auto_advance_stages=true`，才允许自动推进。
+默认策略由 `manual_confirmation_stages` 控制。当前默认只有 `requirement-analysis` 需要人工确认，其他阶段使用 AI 自动确认；新增阶段默认会被视为 AI 自动确认，除非把阶段名加入 `DEFAULT_MANUAL_CONFIRMATION_STAGES` 或初始化时传入 `--manual-confirm-stages`。
 
 如果某个阶段必须全自动推进，要在该阶段说明原因，并确认不会跳过用户需要确认的业务事实。

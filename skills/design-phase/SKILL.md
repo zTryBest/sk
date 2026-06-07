@@ -23,7 +23,7 @@ description: 在需求分析已确认平台名称和平台版本后，进入方�
 
 ## 运行和交互模式
 
-默认使用人工审阅模式。除非用户明确说“全自动”“自动完成所有阶段”“不要逐阶段确认”，否则不能一口气生成完整设计文档。
+独立使用本 skill 时默认使用人工审阅模式。由 `workflow-orchestrator` 以 `worker_mode: true` 调度时，确认点先写入 `pending-questions.json`，由 orchestrator 根据 `manual_confirmation_stages` 决定人工确认或 AI 自动确认；不要在 worker 内直接询问用户。
 
 直连人工模式下，所有用户交互必须使用 `AskQuestion`。worker 模式下不能直接使用 `AskQuestion`，必须写 `pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)` 后停止。
 

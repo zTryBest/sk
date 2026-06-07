@@ -32,6 +32,7 @@ STAGES = [
     "requirement-analysis",
     "design-phase",
 ]
+DEFAULT_MANUAL_CONFIRMATION_STAGES = ["requirement-analysis"]
 
 VALIDATION_BY_STAGE = {
     "requirement-analysis": "requirement-validation.json",
@@ -394,6 +395,77 @@ def add_history(state: dict[str, Any], event: str, detail: dict[str, Any] | None
     history.append({"at": now_iso(), "event": event, "detail": detail or {}})
 
 
+def parse_stage_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    stages: list[str] = []
+    for raw in value.replace(";", ",").split(","):
+        stage = raw.strip()
+        if not stage:
+            continue
+        if stage not in STAGES:
+            raise SystemExit(f"unknown stage in confirmation policy: {stage}; allowed: {', '.join(STAGES)}")
+        if stage not in stages:
+            stages.append(stage)
+    return stages
+
+
+def confirmation_policy_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    if args.full_auto or args.auto_confirm:
+        manual_stages: list[str] = []
+        policy = "full_auto" if args.full_auto else "ai_all"
+    else:
+        manual_stages = list(DEFAULT_MANUAL_CONFIRMATION_STAGES)
+        policy = "default"
+
+    explicit_manual = parse_stage_list(getattr(args, "manual_confirm_stages", None))
+    explicit_ai = parse_stage_list(getattr(args, "ai_confirm_stages", None))
+    if explicit_manual:
+        manual_stages = explicit_manual
+        policy = "custom"
+    for stage in explicit_ai:
+        if stage in manual_stages:
+            manual_stages.remove(stage)
+            policy = "custom"
+
+    return {
+        "stage_confirmation_policy": policy,
+        "manual_confirmation_stages": manual_stages,
+        "ai_confirmation_stages": [stage for stage in STAGES if stage not in manual_stages],
+    }
+
+
+def confirmation_args_explicit(args: argparse.Namespace) -> bool:
+    return bool(
+        getattr(args, "full_auto", False)
+        or getattr(args, "auto_confirm", False)
+        or getattr(args, "manual_confirm_stages", None)
+        or getattr(args, "ai_confirm_stages", None)
+    )
+
+
+def apply_confirmation_policy(state: dict[str, Any], policy: dict[str, Any], *, full_auto: bool, auto_confirm: bool) -> None:
+    state["stage_confirmation_policy"] = policy["stage_confirmation_policy"]
+    state["manual_confirmation_stages"] = policy["manual_confirmation_stages"]
+    state["ai_confirmation_stages"] = policy["ai_confirmation_stages"]
+    state["full_auto"] = bool(full_auto)
+    state["auto_confirm_mode"] = "ai" if full_auto or auto_confirm else "per_stage"
+
+
+def pending_confirmation_stage(state: dict[str, Any]) -> str:
+    return str(state.get("completed_stage_waiting_approval") or state.get("current_stage") or "")
+
+
+def ai_confirmation_enabled_for_state(state: dict[str, Any], *, force_full_auto: bool = False) -> bool:
+    if force_full_auto or state.get("full_auto") or state.get("auto_confirm_mode") == "ai":
+        return True
+    stage = pending_confirmation_stage(state)
+    manual_stages = state.get("manual_confirmation_stages")
+    if not isinstance(manual_stages, list):
+        manual_stages = list(DEFAULT_MANUAL_CONFIRMATION_STAGES)
+    return stage not in {str(item) for item in manual_stages}
+
+
 def unique_paths(paths: list[Path]) -> list[Path]:
     unique: list[Path] = []
     seen: set[str] = set()
@@ -754,16 +826,20 @@ worker-result.json 格式：
 def command_init(args: argparse.Namespace) -> int:
     project_root = resolve_project_root(args.project_root)
     initial_input = build_initial_input(args)
+    confirmation_policy = confirmation_policy_from_args(args)
     explicit_artifact = bool(args.artifact_dir or args.run_id)
     if not explicit_artifact and not args.no_reuse_existing:
         reusable_state = find_reusable_workflow(project_root, initial_input, args.stage)
         if reusable_state:
             reusable = load_state(reusable_state)
             artifact_dir = Path(reusable.get("artifact_dir") or reusable_state.parent).resolve()
+            if confirmation_args_explicit(args):
+                apply_confirmation_policy(reusable, confirmation_policy, full_auto=bool(args.full_auto), auto_confirm=bool(args.auto_confirm))
             write_last_state_pointer(project_root, reusable_state, artifact_dir)
             add_history(reusable, "init_reused_existing", {
                 "stage": args.stage,
                 "input_source_type": initial_input.get("source_type", ""),
+                "confirmation_policy": reusable.get("stage_confirmation_policy", "default"),
             })
             save_state(reusable_state, reusable)
             print(json.dumps({
@@ -803,8 +879,6 @@ def command_init(args: argparse.Namespace) -> int:
         "missing_result_recovery_count": 0,
         "missing_result_recovery_repeat_count": 0,
         "auto_advance_stages": bool(args.auto_advance),
-        "full_auto": bool(args.full_auto),
-        "auto_confirm_mode": "ai" if args.full_auto or args.auto_confirm else "manual",
         "auto_decision_rounds": args.auto_decision_rounds,
         "max_auto_decisions": args.max_auto_decisions,
         "auto_decision_count": 0,
@@ -814,6 +888,7 @@ def command_init(args: argparse.Namespace) -> int:
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
+    apply_confirmation_policy(state, confirmation_policy, full_auto=bool(args.full_auto), auto_confirm=bool(args.auto_confirm))
     write_json(artifact_dir / "workflow-input.json", initial_input)
     add_history(state, "initialized", {"stage": args.stage, "input_source_type": initial_input["source_type"]})
     state_path = state_path_from_artifact(artifact_dir)
@@ -1604,6 +1679,11 @@ def command_status(args: argparse.Namespace) -> int:
         "auto_advance_stages": state.get("auto_advance_stages", False),
         "full_auto": state.get("full_auto", False),
         "auto_confirm_mode": state.get("auto_confirm_mode", "manual"),
+        "stage_confirmation_policy": state.get("stage_confirmation_policy", "default"),
+        "manual_confirmation_stages": state.get("manual_confirmation_stages", DEFAULT_MANUAL_CONFIRMATION_STAGES),
+        "ai_confirmation_stages": state.get("ai_confirmation_stages", [stage for stage in STAGES if stage not in DEFAULT_MANUAL_CONFIRMATION_STAGES]),
+        "current_pending_confirmation_stage": pending_confirmation_stage(state),
+        "current_pending_ai_confirmation_enabled": ai_confirmation_enabled_for_state(state),
         "auto_decision_rounds": state.get("auto_decision_rounds", 0),
         "max_auto_decisions": state.get("max_auto_decisions", 0),
         "auto_decision_count": state.get("auto_decision_count", 0),
@@ -2050,7 +2130,7 @@ def command_run_loop(args: argparse.Namespace) -> int:
         state = load_state(state_path)
         status = state.get("stage_status")
         if status == "NEED_USER_INPUT":
-            auto_enabled = bool(args.full_auto or state.get("full_auto") or state.get("auto_confirm_mode") == "ai")
+            auto_enabled = ai_confirmation_enabled_for_state(state, force_full_auto=bool(args.full_auto))
             if auto_enabled:
                 auto_summary = run_auto_decision_worker(
                     state_path,
@@ -2092,7 +2172,7 @@ def command_run_loop(args: argparse.Namespace) -> int:
                 if recovery.get("stage_status") == "READY":
                     continue
                 if recovery.get("stage_status") == "NEED_USER_INPUT":
-                    auto_enabled = bool(args.full_auto or load_state(state_path).get("full_auto") or load_state(state_path).get("auto_confirm_mode") == "ai")
+                    auto_enabled = ai_confirmation_enabled_for_state(load_state(state_path), force_full_auto=bool(args.full_auto))
                     if auto_enabled:
                         continue
             break
@@ -2102,7 +2182,7 @@ def command_run_loop(args: argparse.Namespace) -> int:
 
         next_state = load_state(state_path)
         if next_state.get("stage_status") == "NEED_USER_INPUT":
-            auto_enabled = bool(args.full_auto or next_state.get("full_auto") or next_state.get("auto_confirm_mode") == "ai")
+            auto_enabled = ai_confirmation_enabled_for_state(next_state, force_full_auto=bool(args.full_auto))
             if auto_enabled:
                 continue
             break
@@ -2202,6 +2282,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--auto-advance", action="store_true", help="Automatically enter the next stage after validation succeeds. Off by default.")
     p_init.add_argument("--full-auto", action="store_true", help="Use AI auto decisions for pending questions. Does not skip real external actions.")
     p_init.add_argument("--auto-confirm", action="store_true", help="Alias-style switch for AI auto decisions without changing stage auto-advance behavior.")
+    p_init.add_argument("--manual-confirm-stages", help="Comma-separated stages that require user confirmation. Default: requirement-analysis. Example: requirement-analysis,design-phase")
+    p_init.add_argument("--ai-confirm-stages", help="Comma-separated stages that should use AI confirmation instead of user confirmation.")
     p_init.add_argument("--auto-decision-rounds", type=int, default=3, help="Number of lightweight review rounds requested from the auto-decision worker.")
     p_init.add_argument("--max-auto-decisions", type=int, default=20, help="Maximum number of AI auto decisions for this workflow run.")
     p_init.add_argument("--enable-worker-subagents", action="store_true", help="Enable stage-scoped read-only subagents inside worker sessions.")

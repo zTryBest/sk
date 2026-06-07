@@ -1,6 +1,10 @@
-# Full Auto Mode
+# Confirmation Modes
 
-全自动模式用于用户明确说“全自动流程”“自动完成所有阶段”“不要人工确认”的情况。
+确认模式用于控制 `pending-questions.json` 由用户回答还是由 AI auto-decision worker 回答。
+
+默认模式：用户没有说明“全自动”或指定人工阶段时，`requirement-analysis` 走人工确认，其他阶段走 AI 自动确认。
+
+全自动模式：用户明确说“全自动流程”“自动完成所有阶段”“不要人工确认”时使用，所有阶段都由 AI 自动确认，真实外部动作除外。
 
 ## 设计原则
 
@@ -15,6 +19,18 @@
 
 ```text
 python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py init --goal "<目标>" --full-auto --auto-decision-rounds 3 --max-auto-decisions 20
+```
+
+初始化自定义人工确认阶段：
+
+```text
+python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py init --goal "<目标>" --manual-confirm-stages requirement-analysis,design-phase
+```
+
+只让方案设计人工、需求分析自动：
+
+```text
+python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py init --goal "<目标>" --manual-confirm-stages design-phase
 ```
 
 推进全自动流程：
