@@ -18,6 +18,7 @@
 - Phase 5 必须机器文件优先：先写 `requirement-handoff.json`，再运行 validator 写 `requirement-validation.json`，随后写 `worker-result.json`。不要只写 `需求分析-草稿.md` 或 `design-phase-handoff.md` 后继续消耗上下文。
 - 草稿也要有 `requirement-handoff.json`，并用 `source.requirement_status=draft` 和 `open_questions` 表达待确认项。
 - `requirement-handoff.json`、`pending-questions.json` 和 `worker-result.json` 必须用 JSON serializer 写入，写完立即 `json.load` 校验；不要手工拼接包含双引号的 JSON 字符串。
+- 文件写入优先用 Write/Edit/MultiEdit 或 Python serializer。不要用 shell heredoc、`cat > file`、`echo ... > file`，也不要把大段 JSON 塞进 `python -c "..."`；Bash 权限拒绝后不要反复重试同类命令。
 - 阶段完成时写 `worker-result.json(status=STAGE_COMPLETED)`，包含 `artifact_dir`、`handoff`、`validation` 和简短 `summary`。
 - 校验失败时先分类：需要用户确认的新事实必须转 pending；纯文档结构或字段遗漏可以基于已知事实补齐并重跑 validator。
 - worker 模式下不要询问“是否继续进入 design-phase”。需求分析完成且 validator 成功时直接返回 `STAGE_COMPLETED`。

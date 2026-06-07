@@ -23,6 +23,21 @@ worker 内部 subAgent 是可选优化，用来减少 worker 自身上下文污�
 - 需要用户确认时，仍由 worker 写 `pending-questions.json`，再由主 session 问用户。
 - 不要为了简单顺序推理创建 subAgent；只有局部任务会明显污染 worker 上下文时才启用。
 
+## 是否替代 `claude -p`
+
+不要把 subAgent 当成 `claude -p` worker 的默认替代品。
+
+`claude -p` 是独立 CLI 进程，适合承担完整阶段：它有独立上下文、独立权限参数、可审计命令、`worker-run-metrics.json`、`worker-cli-output.log` 和明确的文件交接边界。它的缺点是启动成本更高，权限和路径配置更敏感，遇到 Bash 拒绝或 max-turns 截断时需要恢复机制兜底。
+
+subAgent 更适合在一个 worker 内做局部检索或审查：启动轻、上下文隔离感更强、适合并行读材料。但它通常仍依附当前 Claude Code 会话和工具环境，不应该拥有阶段状态机；如果让 subAgent 直接写 handoff、validation 或 workflow state，审计边界会变模糊，也更容易把主 session 拉回业务执行。
+
+推荐策略：
+
+- 默认保持 `主 session -> claude -p worker -> 可选 subAgent`。
+- 当阶段只是短小、只读、无文件交接时，可以考虑 subAgent，但这不适用于 requirement-analysis/design-phase 这类完整阶段。
+- 当 `claude -p` 主要问题是权限配置，优先修正 allowed tools、路径和 worker prompt；不要用 subAgent 绕过权限问题。
+- 当主要问题是 worker 内检索材料太多，再在 `claude -p` worker 内启用 subAgent，把噪声摘要交回父 worker。
+
 ## 和主 Session 的关系
 
 推荐结构是：

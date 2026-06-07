@@ -33,8 +33,10 @@ description: >
 - 如果 `*-validation.json` 报告 `invalid JSON`、`JSONDecodeError`、`Expecting delimiter` 或 `Invalid control character`，主 session 只读取 validation 中的错误行列和短 `json_error.context`，然后重新调度 worker 用 serializer 重写 JSON。不要在主 session 展开读取完整 handoff/Markdown，也不要把优先排查方向转成 BOM 或隐藏字符。
 - worker 必须先读对应子 skill 的 `SKILL.md`。子 skill 的业务流程优先，orchestrator 只覆盖交互方式：worker 不能直接问用户，必须写 `pending-questions.json` 后退出。
 - worker 遇到用户确认、SSO、人机验证、文件选择、外部系统操作、长时间人工处理、MCP/浏览器等不能跨进程保存的资源时，必须先写 `worker-checkpoint.json` 和必要的 `external-action.json`，再写 `pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)` 后退出；禁止只写 pending 不写 result。
+- worker 写文件优先使用 Write/Edit/MultiEdit 或结构化 Python serializer。禁止用 shell heredoc、`cat > file`、`echo ... > file` 或把大段 JSON 嵌进 `python -c "..."`；遇到 Bash 权限拒绝时立即换工具或写 `worker-result.json(status=BLOCKED)`，不要反复消耗 turns。
 - 如果 worker 因 max-turns 被截断但已经留下 `pending-questions.json` 或 `worker-checkpoint.json`，orchestrator 可以自动恢复到 `NEED_USER_INPUT` 或 `READY`。同一 pending/checkpoint 重复恢复超过上限后才标记 `BLOCKED`，避免死循环。
 - 如果 worker 因 max-turns 被截断但已经留下阶段草稿或 handoff Markdown，orchestrator 恢复为 `READY` 并标记 `finalize-recovery`；下一轮只启动收尾 worker 补 `*-handoff.json`、`*-validation.json` 和 `worker-result.json`，主 session 不读取大文档手动收尾。
+- 如果只在 `worker-cli-output.log` 里看到了完整 handoff，但没有 pending/checkpoint/可收尾产物，主 session 也不能从日志手工抽 JSON 补交接文件；应重新调度 worker、调整 worker 权限或标记 `BLOCKED`。
 - 用户回答或主流程完成外部动作后，主 session 只能写 `decisions.jsonl` 或 `external-result.json`，然后重新调用 `run-loop` 拉起 worker。禁止在主 session 里继续执行 requirement-analysis 或 design-phase。
 - 全自动模式下，主 session 不替 worker 执行业务阶段；它只在 `NEED_USER_INPUT` 时调度 auto-decision worker。auto-decision worker 必须输出可审计决策，不能直接改阶段产物。
 - 重新 `run-loop` 不是恢复同一个进程，而是启动新的隔离 worker。worker 必须根据 `worker-checkpoint.json`、`decisions.jsonl`、`external-result.json` 断点继续，不能重复已经完成的步骤。

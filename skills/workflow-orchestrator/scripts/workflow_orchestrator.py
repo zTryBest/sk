@@ -53,6 +53,7 @@ DEFAULT_WORKER_ALLOWED_TOOLS = ",".join([
     "Glob",
     "Grep",
     "LS",
+    "Bash(mkdir *)",
     "WebFetch",
     "WebSearch",
     "mcp__playwright",
@@ -605,6 +606,7 @@ def make_finalize_recovery_notes(state: dict[str, Any], result_path: Path) -> st
     return f"""
 RECOVERY_FINALIZE_MODE:
 上一次 worker 已经写出部分阶段产物，但没有写出可被 orchestrator 记录的 worker-result.json。当前 worker 只做收尾，不重跑完整阶段。
+不要读取或复述 worker-cli-output.log 来抽取完整 JSON；只能基于已有产物文件补齐机器交接文件。
 
 已有产物：
 {existing_files}
@@ -619,6 +621,11 @@ worker-result.artifact_dir 必须写为：{directory}
 
 收尾规则：
 {stage_steps}
+
+写文件要求：
+- 优先使用 Write/Edit/MultiEdit 写文本文件；目录不存在时用 `python -c "from pathlib import Path; Path(r'...').mkdir(parents=True, exist_ok=True)"` 创建目录。
+- 不要使用 shell heredoc、`cat > file`、`echo ... > file` 或把大段 JSON 嵌入 `python -c "..."`，这些写法容易被权限或引号转义打断。
+- 如果 Bash 被权限拒绝，立即改用 Write 工具或最小 Python pathlib 命令；同类权限拒绝不要重试超过 1 次。
 """
 
 
@@ -802,6 +809,9 @@ workflow_goal: {workflow_goal}
 - 所有 JSON 文件都必须用 JSON serializer 写入，禁止手工拼接 JSON 文本。推荐用 Python `json.dump(data, ensure_ascii=False, indent=2)` 或等价结构化写入；写完必须立即用 `json.load(open(path, encoding="utf-8"))` 重新读取校验。字符串里出现双引号、反斜杠、换行、中文标点时，让 serializer 自动转义，不要手动写未转义的 `"..."`。
 - 如果发现 `*-handoff.json`、`pending-questions.json` 或 `worker-result.json` 解析失败，先用 serializer 重写并重跑 validator；不要把无效 JSON 当作阶段完成，也不要把排查方向转到 BOM/隐藏字符。
 - 阶段完成后必须运行对应 validator；validation success=false 时按下面的校验失败处理规则分流，不允许把待确认事实伪造成已确认。
+- 文件写入优先使用 Write/Edit/MultiEdit；目录不存在时用最小 Python pathlib 创建目录。不要用 shell heredoc、`cat > file`、`echo ... > file` 或把大段 JSON 嵌进 `python -c "..."`。
+- 如果 Bash 调用被权限拒绝，立即切换到 Write 工具或最小 Python 命令；同一类被拒命令不要反复尝试。若因此无法继续，写 worker-result.json(status=BLOCKED) 并说明需要调整 allowed tools。
+- Windows 路径保持 prompt 中给出的原始绝对路径；不要在同一阶段混用 `/e/...` 和 `E:/...`。如果必须在 Bash 中使用路径，只用于该命令内部，不要把转换后的路径写入 JSON 交接文件。
 
 {validation_policy}
 
@@ -1644,6 +1654,7 @@ def recover_missing_worker_result(state_path: Path, run_summary: dict[str, Any])
         "state": str(state_path),
         "stage_status": "BLOCKED",
         "reason": "worker-result.json missing and no pending questions/checkpoint could be used for recovery",
+        "next_action": "rerun run-loop with a fresh worker or adjusted worker permissions; do not manually extract full JSON from worker-cli-output.log",
     }
 
 
@@ -2231,7 +2242,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_worker_run_options(worker_parser: argparse.ArgumentParser) -> None:
         worker_parser.add_argument("--output-format", default="json")
-        worker_parser.add_argument("--max-turns", type=int, default=30)
+        worker_parser.add_argument("--max-turns", type=int, default=45)
         worker_parser.add_argument(
             "--permission-mode",
             default=None,
