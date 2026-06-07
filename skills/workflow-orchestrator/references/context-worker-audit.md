@@ -28,7 +28,7 @@
 
 主 session 只能做结构性判断：
 
-- 是否只读取了 `workflow-state.json`、`worker-result.json`、`pending-questions.json`、`worker-run-metrics.json` 等轻量文件。
+- 是否只读取了 `workflow-state.json`、`worker-result.json`、`pending-questions.json` 等轻量文件。
 - 是否避免读取完整需求文档、完整设计文档、`worker-cli-output.log`、MCP 全量日志。
 - 如果主 session 已经读取上述大文件，应视为上下文边界被破坏，需要后续收敛回轻量状态，不要继续把阶段工作搬到主 session。
 
@@ -42,7 +42,7 @@
 - 命令包含 `-p` 或 `--print`
 - 没有 `--resume` / `--continue`
 - 包含 `--no-session-persistence`
-- 存在 `worker-run-metrics.json` 和 `worker-result.json`
+- 存在 `workflow-state.json.latest_worker_run` 和 `worker-result.json`
 
 如果 CLI JSON 返回 `session_id`、`usage`、`num_turns`、`total_cost_usd`，可以作为 worker 运行证据。没有返回时，不应单独视为失败。
 
@@ -52,8 +52,8 @@
 
 ```text
 主 session 精确占用：请在当前 Claude Code 主 session 输入 /context 查看；本 skill 不从脚本读取该数字。
-主 session 边界：本轮只读取了 workflow-state / pending-questions / worker-result / metrics 等轻量文件，未读取大文档或日志。
-worker 隔离：已通过/未通过。证据：claude -p、无 resume/continue、no-session-persistence、metrics 路径。
+主 session 边界：本轮只读取了 workflow-state / pending-questions / worker-result 等轻量文件，未读取大文档或日志。
+worker 隔离：已通过/未通过。证据：claude -p、无 resume/continue、no-session-persistence、latest_worker_run 摘要。
 AI 自动确认：启用/未启用；已自动确认次数；auto-decisions.jsonl 路径；若停止，说明是否因为外部动作或上限。
 当前阶段状态：READY/NEED_USER_INPUT/COMPLETED/BLOCKED。
 ```

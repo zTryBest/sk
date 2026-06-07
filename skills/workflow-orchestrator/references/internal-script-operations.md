@@ -57,6 +57,7 @@ python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py metric
 - 如果 pending 已被 `decisions.jsonl` 回答且存在 `worker-checkpoint.json`，脚本恢复为 `READY`，下一轮 worker 从 checkpoint 继续。
 - 如果只有 checkpoint 没有 pending，脚本恢复为 `READY`。
 - 如果没有 pending/checkpoint 但能在 `requirements/<product>/` 中找到阶段草稿或 handoff Markdown，脚本恢复为 `READY` 并写入 `recovery_finalize`。下一轮 worker prompt 会进入 `RECOVERY_FINALIZE_MODE`，只补 `*-handoff.json`、`*-validation.json` 和 `worker-result.json`。
+- `RECOVERY_FINALIZE_MODE` 只适用于“已有阶段产物、缺机器交接文件”的收尾场景。收尾 worker 不能重跑正常阶段流程，尤其不能重新抓取 URL、重新 WebFetch、重新启动 Playwright/MCP 或重新 SSO 登录；如果已有产物不足以收尾，应写 `BLOCKED` 或 `NEED_USER_INPUT`，由主流程决定是否重新启动正常阶段。
 - 如果没有 pending/checkpoint/可收尾产物，或同一恢复签名重复超过 `max_missing_result_recoveries`，才标记 `BLOCKED`。
 - 不要通过手动编辑 `workflow-state.json` 从 `BLOCKED` 改回 `READY`；优先依赖恢复机制或重新初始化。
 - 不要从 `worker-cli-output.log` 手工抽取完整 JSON 写 handoff。日志只能用于诊断；产物恢复必须通过已有文件、checkpoint 或新 worker 完成。
@@ -71,11 +72,13 @@ python <workflow-orchestrator-skill-dir>/scripts/workflow_orchestrator.py metric
 - `--no-session-persistence`
 - `--output-format json`
 - 默认 `--max-turns 45`。如果仍然因为权限拒绝耗尽 turns，优先修正 allowed tools 或 worker 写文件方式，而不是继续单纯加 turns。
+- 默认精简模式只写业务必需文件和 `workflow-state.json.latest_worker_run` 轻量摘要，不写 `worker-prompt.md`、`worker-cli-output.log`、`worker-run-metrics.json`。排障时设置 `WORKFLOW_KEEP_WORKER_DEBUG=1` 才保留这些调试文件。
 
 worker 写文件注意：
 
 - 优先用 Write/Edit/MultiEdit 或 Python `json.dump(..., ensure_ascii=False, indent=2)` 写 JSON，再立即 `json.load` 校验。
 - 不要使用 shell heredoc、`cat > file`、`echo ... > file`，也不要把大段 JSON 塞进 `python -c "..."`。
+- 不要在产物目录留下 `_gen_result.py`、`_gen_handoff.py`、`_gen_*.py` 等临时 Python helper；orchestrator 默认会清理这些 helper。排障时设置 `WORKFLOW_KEEP_WORKER_DEBUG=1` 可保留。
 - 目录不存在时只允许最小化创建目录，例如 `mkdir` 或 Python pathlib；Windows 路径不要在 JSON 中混写 `/e/...` 和 `E:/...`。
 - Bash 权限拒绝出现一次后，worker 应切换工具或写 `worker-result.json(status=BLOCKED)`，不要反复尝试同类命令。
 

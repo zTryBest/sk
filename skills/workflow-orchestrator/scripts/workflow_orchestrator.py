@@ -31,17 +31,20 @@ configure_stdio()
 STAGES = [
     "requirement-analysis",
     "design-phase",
+    "backend-development",
 ]
 DEFAULT_MANUAL_CONFIRMATION_STAGES = ["requirement-analysis"]
 
 VALIDATION_BY_STAGE = {
     "requirement-analysis": "requirement-validation.json",
     "design-phase": "design-validation.json",
+    "backend-development": "backend-validation.json",
 }
 
 HANDOFF_BY_STAGE = {
     "requirement-analysis": "requirement-handoff.json",
     "design-phase": "design-handoff.json",
+    "backend-development": "backend-code-result.json",
 }
 
 DEFAULT_WORKER_PERMISSION_MODE = "acceptEdits"
@@ -116,11 +119,48 @@ DEFAULT_WORKER_SUBAGENTS = {
         "permissionMode": "default",
         "maxTurns": 8,
     },
+    "backend-code-map": {
+        "description": "Read-only mapper for backend-development. Use to inspect Java scaffold structure, build tool, package layout, and likely edit points.",
+        "prompt": (
+            "You are a read-only code map subagent inside a backend-development worker. "
+            "Inspect the Java Web scaffold and return concise package structure, build/test commands, likely Controller/Service/Repository/DTO files, and risks. "
+            "Do not edit or write files. Do not ask the user."
+        ),
+        "tools": ["Read", "Glob", "Grep", "LS"],
+        "model": "inherit",
+        "permissionMode": "default",
+        "maxTurns": 10,
+    },
+    "backend-implementation-reviewer": {
+        "description": "Read-only reviewer for backend implementation coverage against design-handoff.",
+        "prompt": (
+            "You are a read-only implementation reviewer inside a backend-development worker. "
+            "Compare changed Java backend code to design-handoff and report missing behavior, contract risks, and compile/test concerns. "
+            "Do not edit or write files. Do not ask the user."
+        ),
+        "tools": ["Read", "Glob", "Grep", "LS"],
+        "model": "inherit",
+        "permissionMode": "default",
+        "maxTurns": 10,
+    },
+    "backend-test-reviewer": {
+        "description": "Read-only reviewer for backend build/test failures.",
+        "prompt": (
+            "You are a read-only test reviewer inside a backend-development worker. "
+            "Analyze build/test output summaries and source context, then suggest targeted fixes. "
+            "Do not edit or write files. Do not ask the user."
+        ),
+        "tools": ["Read", "Glob", "Grep", "LS"],
+        "model": "inherit",
+        "permissionMode": "default",
+        "maxTurns": 8,
+    },
 }
 
 STAGE_WORKER_SUBAGENTS = {
     "requirement-analysis": ["workflow-requirement-researcher"],
     "design-phase": ["workflow-design-researcher", "workflow-risk-reviewer"],
+    "backend-development": ["backend-code-map", "backend-implementation-reviewer", "backend-test-reviewer"],
 }
 
 
@@ -207,6 +247,41 @@ def resolve_stage_skill(project_root: Path, stage: str) -> Path:
 def env_truthy(name: str) -> bool:
     value = os.environ.get(name, "")
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def keep_worker_debug_files() -> bool:
+    return env_truthy("WORKFLOW_KEEP_WORKER_DEBUG")
+
+
+def cleanup_generated_helper_scripts(*directories: Path | None) -> list[str]:
+    if keep_worker_debug_files():
+        return []
+    removed: list[str] = []
+    patterns = ("_gen_*.py", "_gen*.py")
+    seen: set[str] = set()
+    for directory in directories:
+        if directory is None:
+            continue
+        try:
+            resolved = directory.resolve()
+        except OSError:
+            continue
+        if not resolved.exists() or not resolved.is_dir():
+            continue
+        key = str(resolved).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        for pattern in patterns:
+            for path in resolved.glob(pattern):
+                if not path.is_file():
+                    continue
+                try:
+                    path.unlink()
+                    removed.append(str(path))
+                except OSError:
+                    pass
+    return removed
 
 
 def stage_subagent_names(stage: str) -> list[str]:
@@ -531,6 +606,10 @@ def find_partial_finalize_candidate(state: dict[str, Any]) -> dict[str, Any] | N
         evidence_names = ["design-doc.md", "design-handoff.json", "design-phase-state.md"]
         required_names = ["design-handoff.json", "design-validation.json"]
         validator = "design-phase/scripts/validate_design.py"
+    elif stage == "backend-development":
+        evidence_names = ["backend-code-result.json", "backend-validation.json", "pom.xml", "build.gradle", "settings.gradle", "src"]
+        required_names = ["backend-code-result.json", "backend-validation.json"]
+        validator = "backend-development/scripts/validate_backend.py"
     else:
         return None
 
@@ -601,11 +680,22 @@ def make_finalize_recovery_notes(state: dict[str, Any], result_path: Path) -> st
 - 如果缺少 API 选择、架构决策、数据库类型或其他用户决策，写 pending-questions.json 和 `{result_path}`，status=NEED_USER_INPUT。
 - 如果 validation success=true，写 `{result_path}`，status=STAGE_COMPLETED。
 """
+    elif stage == "backend-development":
+        validator_script = stage_skill_dir / "scripts" / "validate_backend.py"
+        stage_steps = f"""
+- 只读取已有后端源码、backend-code-result 草稿和 backend-development 的 output-contracts，不要重新调用脚手架服务，不要重跑完整编码阶段。
+- 补齐或修正 `{handoff}`，确保 source.backend_status、scaffold.source_dir、changed_files 和 build_and_test 信息完整。
+- 运行：`python "{validator_script}" --handoff "{handoff}" --output "{validation}" --project-root "{project_root}"`
+- 如果已有源码/结果不足以收尾，写 `{result_path}`，status=BLOCKED 或 NEED_USER_INPUT。
+- 如果 validation success=true，写 `{result_path}`，status=STAGE_COMPLETED。
+"""
     else:
         stage_steps = "- 当前阶段没有 finalize-recovery 规则，写 BLOCKED result。\n"
     return f"""
 RECOVERY_FINALIZE_MODE:
 上一次 worker 已经写出部分阶段产物，但没有写出可被 orchestrator 记录的 worker-result.json。当前 worker 只做收尾，不重跑完整阶段。
+本模式优先于子 skill 的正常完整阶段流程；只使用子 skill 的 output-contracts、validator 和 worker-result 文件契约。
+禁止重新读取 ticket URL、重新 WebFetch、重新启动 Playwright/MCP、重新 SSO 登录或重新执行完整需求分析/方案设计。
 不要读取或复述 worker-cli-output.log 来抽取完整 JSON；只能基于已有产物文件补齐机器交接文件。
 
 已有产物：
@@ -625,6 +715,7 @@ worker-result.artifact_dir 必须写为：{directory}
 写文件要求：
 - 优先使用 Write/Edit/MultiEdit 写文本文件；目录不存在时用 `python -c "from pathlib import Path; Path(r'...').mkdir(parents=True, exist_ok=True)"` 创建目录。
 - 不要使用 shell heredoc、`cat > file`、`echo ... > file` 或把大段 JSON 嵌入 `python -c "..."`，这些写法容易被权限或引号转义打断。
+- 不要在产物目录留下 `_gen_result.py`、`_gen_handoff.py`、`_gen_*.py` 或其他临时 Python helper。确实需要 helper 时写到临时目录并在写出 JSON 后删除；最终目录只保留业务交接文件。
 - 如果 Bash 被权限拒绝，立即改用 Write 工具或最小 Python pathlib 命令；同类权限拒绝不要重试超过 1 次。
 """
 
@@ -696,6 +787,7 @@ def make_worker_prompt(state: dict[str, Any]) -> str:
     result_path = artifact_dir / "worker-result.json"
     pending_path = artifact_dir / "pending-questions.json"
     state_path = artifact_dir / "workflow-state.json"
+    recovery_finalize_mode = isinstance(state.get("recovery_finalize"), dict)
 
     if stage not in set(STAGES):
         return f"""worker_mode: true
@@ -729,7 +821,15 @@ artifact_dir: {artifact_dir}
 - 阶段边界不要询问“是否继续下一阶段”；阶段完成且 validator success=true 时直接写 worker-result.json(status=STAGE_COMPLETED)。是否进入下一阶段由 orchestrator 在主 session 中通过 pending-questions.json 统一确认。
 """
     stage_specific_notes = ""
-    if stage == "requirement-analysis":
+    if recovery_finalize_mode:
+        stage_specific_notes = """
+收尾模式阶段特别注意：
+- 当前是 RECOVERY_FINALIZE_MODE，不执行正常阶段抓取、登录、MCP 检索或完整分析流程。
+- 不要读取 workflow-input 中的 ticket URL，不要调用 WebFetch/Playwright/MCP，不要重新 SSO 登录。
+- 只读取 recovery_finalize 指定的已有产物、子 skill 的 output-contracts/worker-mode 规则和 validator，补齐 handoff、validation、worker-result。
+- 如果已有产物不足以补齐机器文件，写 worker-result.json(status=BLOCKED 或 NEED_USER_INPUT)，不要重跑完整阶段。
+"""
+    elif stage == "requirement-analysis":
         stage_specific_notes = """
 阶段特别注意：
 - 必须先读取 workflow-input.json，并根据其中的 source_type/sources 选择 requirement-analysis 的输入模式。
@@ -749,6 +849,19 @@ artifact_dir: {artifact_dir}
 - 选中基线 API 后必须调用详情并把接口路径、请求参数/契约、响应结果/契约写入 design-handoff.json；只写 API 名称或组件名不算可交接。
 - 选中基线 API 后必须写入版本兼容证据：resolved_doc_version、contract_doc_version、version_match_policy、version_compatibility=PASS；contract_doc_version 不能高于 resolved_doc_version。
 """
+    elif stage == "backend-development":
+        stage_specific_notes = """
+阶段特别注意：
+- 必须优先读取 design-handoff.json；不要依赖 workflow_goal 或聊天历史补事实。
+- 当前阶段默认自动推进，不询问“是否开始编码”或“是否继续开发”。
+- 脚手架服务尚未封装 MCP，使用 backend-development/scripts/scaffold_client.py 调用 HTTP 服务；固定协议是 POST http://<ip>:8888/v1/frame/frame，请求体包含 configInfo、version、packageName、componentId、serviceId、port、errorCode、dependenciesVersion、email、author，响应必须是 zip 文件流。
+- 正确获取 zip 后解压到工作目录，以 scaffold-manifest.json.source_dir 作为源码目录再开始编码；恢复时如果 manifest/source_dir 已存在，不要重复调用脚手架服务。
+- 服务 URL、component_id、component_version 或输出目录缺失时，写 worker-checkpoint.json、pending-questions.json 和 worker-result.json(status=NEED_USER_INPUT)。
+- 脚手架服务不可用、响应不是 zip、下载/登录/外部系统动作时，写 external-action.json、worker-checkpoint.json、pending-questions.json 和 worker-result.json(status=NEED_USER_INPUT)。
+- 可以使用 backend-code-map、backend-implementation-reviewer、backend-test-reviewer 这类只读 subAgent 做代码结构、实现覆盖和测试失败分析；最终写文件、跑测试和阶段交接由当前 worker 负责。
+- 只在脚手架源码目录内修改后端代码，不修改需求/设计产物，不做无关重构或大范围格式化。
+- 阶段完成后必须生成 backend-code-result.json 和 backend-validation.json。
+"""
     finalize_notes = make_finalize_recovery_notes(state, result_path)
     subagent_names = state.get("worker_subagents") or []
     if state.get("worker_subagents_enabled") and subagent_names:
@@ -764,6 +877,12 @@ worker 内部 subAgent 可选规则：
         subagent_notes = """
 worker 内部 subAgent 当前未启用。请在当前 worker session 内直接完成阶段任务。
 """
+    if recovery_finalize_mode:
+        skill_priority_note = "2. 当前是 RECOVERY_FINALIZE_MODE：本 prompt 的收尾约束优先于子 skill 的正常完整阶段流程；读取子 skill 只为确认 output contracts、validator 和 worker-result 写法。"
+        worker_mode_note = "3. 当前 worker_mode 只执行收尾：禁止重新抓取、登录、MCP 检索或完整阶段分析；只补齐缺失的机器交接文件。"
+    else:
+        skill_priority_note = "2. 子 skill 的流程规则优先级高于本 orchestrator prompt；本 prompt 只覆盖“交互方式”和“worker-result 写法”。"
+        worker_mode_note = "3. worker_mode 只把 AskQuestion 替换为 pending-questions.json，不改变子 skill 的抓取、分析、MCP、校验等规则。"
 
     return f"""worker_mode: true
 stage: {stage}
@@ -776,8 +895,8 @@ workflow_goal: {workflow_goal}
 
 严格执行顺序：
 1. 第一件事必须读取并理解上面的 SKILL.md 文件。不要只根据本 prompt 猜流程。
-2. 子 skill 的流程规则优先级高于本 orchestrator prompt；本 prompt 只覆盖“交互方式”和“worker-result 写法”。
-3. worker_mode 只把 AskQuestion 替换为 pending-questions.json，不改变子 skill 的抓取、分析、MCP、校验等规则。
+{skill_priority_note}
+{worker_mode_note}
 4. 如果无法读取子 skill，立即写 {result_path}，status=BLOCKED，summary 写明“子 skill 未加载”，然后停止。
 5. 这不是聊天问候任务。不要只回复“你好”“我可以帮你”等普通对话。必须实际执行阶段任务、读写文件，并最终写 worker-result.json。
 6. 标准输出可以很短，但文件产物是必需的；没有 worker-result.json 就视为本次 worker 失败。
@@ -810,6 +929,7 @@ workflow_goal: {workflow_goal}
 - 如果发现 `*-handoff.json`、`pending-questions.json` 或 `worker-result.json` 解析失败，先用 serializer 重写并重跑 validator；不要把无效 JSON 当作阶段完成，也不要把排查方向转到 BOM/隐藏字符。
 - 阶段完成后必须运行对应 validator；validation success=false 时按下面的校验失败处理规则分流，不允许把待确认事实伪造成已确认。
 - 文件写入优先使用 Write/Edit/MultiEdit；目录不存在时用最小 Python pathlib 创建目录。不要用 shell heredoc、`cat > file`、`echo ... > file` 或把大段 JSON 嵌进 `python -c "..."`。
+- 不要在 artifact_dir、requirements 产品目录或设计目录留下 `_gen_result.py`、`_gen_handoff.py`、`_gen_*.py` 等临时 Python helper；如果为了 JSON 序列化确实创建 helper，写到临时目录并在完成后删除。
 - 如果 Bash 调用被权限拒绝，立即切换到 Write 工具或最小 Python 命令；同一类被拒命令不要反复尝试。若因此无法继续，写 worker-result.json(status=BLOCKED) 并说明需要调整 allowed tools。
 - Windows 路径保持 prompt 中给出的原始绝对路径；不要在同一阶段混用 `/e/...` 和 `E:/...`。如果必须在 Bash 中使用路径，只用于该命令内部，不要把转换后的路径写入 JSON 交接文件。
 
@@ -1207,9 +1327,11 @@ def run_auto_decision_worker(
         save_state(state_path, state)
         return {"resolved": False, "reason": "max_auto_decisions reached", "max_auto_decisions": configured_limit}
 
+    keep_debug = keep_worker_debug_files()
     prompt = make_auto_decision_prompt(state, pending, rounds=rounds, max_decisions=remaining)
     prompt_path = artifact_dir / "auto-decision-prompt.md"
-    prompt_path.write_text(prompt, encoding="utf-8")
+    if keep_debug:
+        prompt_path.write_text(prompt, encoding="utf-8")
 
     decisions: list[dict[str, Any]] = []
     review_rounds: list[Any] = []
@@ -1253,7 +1375,8 @@ def run_auto_decision_worker(
             capture_output=True,
             env=env,
         )
-        log_path.write_text((completed.stdout or "") + ("\nSTDERR:\n" + completed.stderr if completed.stderr else ""), encoding="utf-8")
+        if keep_debug:
+            log_path.write_text((completed.stdout or "") + ("\nSTDERR:\n" + completed.stderr if completed.stderr else ""), encoding="utf-8")
         decision_text = extract_cli_text_result(completed.stdout or "")
         decision_data = parse_auto_decision_json(decision_text)
         if isinstance(decision_data, dict):
@@ -1275,15 +1398,15 @@ def run_auto_decision_worker(
     if raw_status != "AUTO_DECIDED" or not decisions:
         add_history(state, "auto_decision_needs_user", {
             "reason": reason or "AI auto decision declined or no safe default was available",
-            "prompt": str(prompt_path),
-            "log": str(log_path) if log_path.exists() else "",
+            "prompt": str(prompt_path) if keep_debug else "",
+            "log": str(log_path) if keep_debug and log_path.exists() else "",
         })
         save_state(state_path, state)
         return {
             "resolved": False,
             "reason": reason or "AI auto decision declined or no safe default was available",
-            "prompt": str(prompt_path),
-            "log": str(log_path) if log_path.exists() else "",
+            "prompt": str(prompt_path) if keep_debug else "",
+            "log": str(log_path) if keep_debug and log_path.exists() else "",
             "returncode": completed.returncode if completed else None,
         }
 
@@ -1311,8 +1434,8 @@ def run_auto_decision_worker(
         "count": len(applied),
         "rounds": rounds,
         "reason": reason,
-        "prompt": str(prompt_path),
-        "log": str(log_path) if log_path.exists() else "",
+        "prompt": str(prompt_path) if keep_debug else "",
+        "log": str(log_path) if keep_debug and log_path.exists() else "",
     })
     save_state(state_path, state)
     append_jsonl_all(artifact_dir / "auto-decisions.jsonl", [
@@ -1322,8 +1445,8 @@ def run_auto_decision_worker(
             "decision": decision,
             "review_rounds": review_rounds,
             "reason": reason,
-            "prompt": str(prompt_path),
-            "log": str(log_path) if log_path.exists() else "",
+            "prompt": str(prompt_path) if keep_debug else "",
+            "log": str(log_path) if keep_debug and log_path.exists() else "",
             "returncode": completed.returncode if completed else None,
         }
         for decision in applied
@@ -1334,8 +1457,8 @@ def run_auto_decision_worker(
         "decisions": applied,
         "review_rounds": review_rounds,
         "reason": reason,
-        "prompt": str(prompt_path),
-        "log": str(log_path) if log_path.exists() else "",
+        "prompt": str(prompt_path) if keep_debug else "",
+        "log": str(log_path) if keep_debug and log_path.exists() else "",
         "returncode": completed.returncode if completed else None,
     }
 
@@ -1367,9 +1490,9 @@ def record_worker_result(state_path: Path, result_path: Path) -> dict[str, Any]:
 
     status = result.get("status")
     artifact_dir = Path(result.get("artifact_dir") or state["artifact_dir"]).resolve()
+    old_artifact_dir = Path(state["artifact_dir"]).resolve()
     if artifact_dir != Path(state["artifact_dir"]).resolve():
         old_state_path = state_path
-        old_artifact_dir = Path(state["artifact_dir"]).resolve()
         state["artifact_dir"] = str(artifact_dir)
         artifact_dir.mkdir(parents=True, exist_ok=True)
         for filename in [
@@ -1400,6 +1523,9 @@ def record_worker_result(state_path: Path, result_path: Path) -> dict[str, Any]:
         if not state_path.exists():
             write_json(state_path, state)
         add_history(state, "artifact_dir_changed", {"from": str(old_state_path.parent), "to": str(artifact_dir)})
+    removed_helpers = cleanup_generated_helper_scripts(old_artifact_dir, artifact_dir)
+    if removed_helpers:
+        add_history(state, "generated_helper_scripts_removed", {"paths": removed_helpers})
 
     state["current_phase"] = result.get("phase") or state.get("current_phase", "")
     state["latest_handoff"] = result.get("handoff") or state.get("latest_handoff", "")
@@ -1669,6 +1795,8 @@ def command_status(args: argparse.Namespace) -> int:
     artifact_dir = Path(state.get("artifact_dir") or ".")
     metrics_path = artifact_dir / "worker-run-metrics.json"
     metrics = read_json(metrics_path, {}) if metrics_path.exists() else {}
+    if not isinstance(metrics, dict) or not metrics:
+        metrics = state.get("latest_worker_run") if isinstance(state.get("latest_worker_run"), dict) else {}
     checkpoint_path = artifact_dir / "worker-checkpoint.json"
     external_action_path = artifact_dir / "external-action.json"
     external_result_path = artifact_dir / "external-result.json"
@@ -1708,19 +1836,10 @@ def command_status(args: argparse.Namespace) -> int:
         "max_missing_result_recoveries": state.get("max_missing_result_recoveries", DEFAULT_MAX_MISSING_RESULT_RECOVERIES),
         "missing_result_recovery_count": state.get("missing_result_recovery_count", 0),
         "missing_result_recovery_repeat_count": state.get("missing_result_recovery_repeat_count", 0),
-        "worker_proof": compact_worker_proof(metrics, metrics_path) if metrics else {
+        "worker_proof": compact_worker_proof(metrics, metrics_path if metrics_path.exists() else None) if metrics else {
             "worker_used": False,
-            "reason": "worker-run-metrics.json not found",
+            "reason": "latest worker run proof not found",
         },
-        "latest_worker_metrics": {
-            "path": str(metrics_path) if metrics else "",
-            "returncode": metrics.get("returncode"),
-            "duration_seconds": metrics.get("duration_seconds"),
-            "session_id": metrics.get("session_id"),
-            "num_turns": metrics.get("num_turns"),
-            "total_cost_usd": metrics.get("total_cost_usd"),
-            "usage": metrics.get("usage"),
-        } if metrics else {},
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
@@ -1728,10 +1847,9 @@ def command_status(args: argparse.Namespace) -> int:
 
 def compact_worker_proof(metrics: dict[str, Any], metrics_path: Path | None = None) -> dict[str, Any]:
     command = metrics.get("command") if isinstance(metrics.get("command"), list) else []
-    command_text = " ".join(str(part) for part in command)
-    uses_print_worker = "-p" in command or "--print" in command
-    resumes_session = any(part in {"--resume", "-r", "--continue", "-c"} for part in command)
-    disables_session_persistence = "--no-session-persistence" in command
+    uses_print_worker = bool(metrics.get("command_contains_claude_print")) or "-p" in command or "--print" in command
+    resumes_session = bool(metrics.get("command_resumes_existing_session")) or any(part in {"--resume", "-r", "--continue", "-c"} for part in command)
+    disables_session_persistence = bool(metrics.get("command_disables_session_persistence")) or "--no-session-persistence" in command
     worker_used = bool(metrics.get("is_worker")) and metrics.get("worker_invocation") == "claude -p" and uses_print_worker and not resumes_session
     return {
         "worker_used": worker_used,
@@ -1746,12 +1864,9 @@ def compact_worker_proof(metrics: dict[str, Any], metrics_path: Path | None = No
         "worker_subagents_enabled": metrics.get("worker_subagents_enabled", False),
         "allowed_subagents": metrics.get("allowed_subagents", []),
         "metrics_path": str(metrics_path) if metrics_path else "",
-        "log_path": metrics.get("log_path", ""),
-        "prompt_path": metrics.get("prompt_path", ""),
         "command_contains_claude_print": uses_print_worker,
         "command_resumes_existing_session": resumes_session,
         "command_disables_session_persistence": disables_session_persistence,
-        "command": command_text,
     }
 
 
@@ -1763,11 +1878,13 @@ def audit_worker_isolation(state_path: Path) -> dict[str, Any]:
     result_path = artifact_dir / "worker-result.json"
     pending_path = artifact_dir / "pending-questions.json"
     metrics = read_json(metrics_path, {})
+    if not isinstance(metrics, dict) or not metrics:
+        metrics = state.get("latest_worker_run") if isinstance(state.get("latest_worker_run"), dict) else {}
     result = read_json(result_path, {})
-    proof = compact_worker_proof(metrics, metrics_path) if isinstance(metrics, dict) and metrics else {
+    proof = compact_worker_proof(metrics, metrics_path if metrics_path.exists() else None) if isinstance(metrics, dict) and metrics else {
         "worker_used": False,
-        "reason": "worker-run-metrics.json not found",
-        "metrics_path": str(metrics_path),
+        "reason": "latest worker run proof not found",
+        "metrics_path": str(metrics_path) if metrics_path.exists() else "",
     }
     issues: list[str] = []
     if not proof.get("worker_used"):
@@ -1802,7 +1919,6 @@ def audit_worker_isolation(state_path: Path) -> dict[str, Any]:
                 str(state_path),
                 str(result_path),
                 str(pending_path),
-                str(metrics_path),
                 str(artifact_dir / "worker-checkpoint.json"),
                 str(artifact_dir / "external-action.json"),
                 str(artifact_dir / "external-result.json"),
@@ -1897,6 +2013,9 @@ def build_worker_metrics(
     total_cost = _deep_find_first(result, {"total_cost_usd", "totalCostUsd", "cost_usd"})
     num_turns = _deep_find_first(result, {"num_turns", "numTurns"})
     usage = _deep_find_first(result, {"usage", "modelUsage", "token_usage", "tokenUsage"})
+    uses_print_worker = "-p" in cmd or "--print" in cmd
+    resumes_session = any(part in {"--resume", "-r", "--continue", "-c"} for part in cmd)
+    disables_session_persistence = "--no-session-persistence" in cmd
 
     return {
         "is_worker": True,
@@ -1906,10 +2025,12 @@ def build_worker_metrics(
         "ended_at": ended_at,
         "duration_seconds": round(duration_seconds, 3),
         "returncode": completed.returncode,
-        "command": cmd,
         "prompt_delivery": "stdin",
         "prompt_path": str(prompt_path),
         "log_path": str(log_path),
+        "command_contains_claude_print": uses_print_worker,
+        "command_resumes_existing_session": resumes_session,
+        "command_disables_session_persistence": disables_session_persistence,
         "stdout_json_parsed": parsed.get("parsed", False),
         "stdout_classification": stdout_classification,
         "worker_subagents_enabled": worker_subagents_enabled,
@@ -1918,9 +2039,7 @@ def build_worker_metrics(
         "session_id": session_id,
         "num_turns": num_turns,
         "total_cost_usd": total_cost,
-        "usage": usage,
-        "raw_result_keys": sorted(result.keys()) if isinstance(result, dict) else [],
-        "note": "Use /context inside an interactive Claude Code session for live context window usage; claude -p worker usage is captured here from CLI JSON when available.",
+        "usage_summary": usage if isinstance(usage, (int, float, str)) else "",
     }
 
 
@@ -1951,7 +2070,7 @@ def run_worker_once(
     state_path: Path,
     *,
     output_format: str = "json",
-    max_turns: int = 30,
+    max_turns: int = 45,
     permission_mode: str | None = None,
     allowed_tools: str | None = None,
     mcp_config: str | None = None,
@@ -1968,14 +2087,20 @@ def run_worker_once(
     allowed_subagents = stage_subagent_names(state["current_stage"]) if subagents_enabled else []
     state["worker_subagents_enabled"] = subagents_enabled
     state["worker_subagents"] = allowed_subagents
+    keep_debug = keep_worker_debug_files()
     prompt_path = artifact_dir / "worker-prompt.md"
     prompt = make_worker_prompt(state)
-    prompt_path.write_text(prompt, encoding="utf-8")
+    if keep_debug:
+        prompt_path.write_text(prompt, encoding="utf-8")
     result_path = artifact_dir / "worker-result.json"
     if result_path.exists():
-        archive_path = artifact_dir / f"worker-result.previous-{_dt.datetime.now().strftime('%Y%m%d%H%M%S%f')}.json"
-        shutil.move(str(result_path), str(archive_path))
-        add_history(state, "previous_worker_result_archived", {"from": str(result_path), "to": str(archive_path)})
+        if keep_debug:
+            archive_path = artifact_dir / f"worker-result.previous-{_dt.datetime.now().strftime('%Y%m%d%H%M%S%f')}.json"
+            shutil.move(str(result_path), str(archive_path))
+            add_history(state, "previous_worker_result_archived", {"from": str(result_path), "to": str(archive_path)})
+        else:
+            result_path.unlink()
+            add_history(state, "previous_worker_result_removed", {"path": str(result_path)})
 
     claude = shutil.which("claude")
     if not claude:
@@ -2050,7 +2175,8 @@ def run_worker_once(
     ended_at = now_iso()
     duration_seconds = time.monotonic() - started_monotonic
     log_path = artifact_dir / "worker-cli-output.log"
-    log_path.write_text((completed.stdout or "") + ("\nSTDERR:\n" + completed.stderr if completed.stderr else ""), encoding="utf-8")
+    if keep_debug:
+        log_path.write_text((completed.stdout or "") + ("\nSTDERR:\n" + completed.stderr if completed.stderr else ""), encoding="utf-8")
     stdout_classification = classify_worker_stdout(completed.stdout or "")
     metrics = build_worker_metrics(
         cmd=cmd,
@@ -2065,14 +2191,28 @@ def run_worker_once(
         allowed_subagents=allowed_subagents,
     )
     metrics_path = artifact_dir / "worker-run-metrics.json"
-    write_json(metrics_path, metrics)
-    add_history(state, "worker_cli_run", {"returncode": completed.returncode, "log": str(log_path), "metrics": str(metrics_path), "stdout_classification": stdout_classification})
+    if keep_debug:
+        write_json(metrics_path, metrics)
+    else:
+        metrics_path = Path("")
+        metrics["prompt_path"] = ""
+        metrics["log_path"] = ""
+    removed_helpers = cleanup_generated_helper_scripts(artifact_dir, finalize_dir)
+    state["latest_worker_run"] = metrics
+    add_history(state, "worker_cli_run", {
+        "returncode": completed.returncode,
+        "debug_files": bool(keep_debug),
+        "log": str(log_path) if keep_debug else "",
+        "metrics": str(metrics_path) if keep_debug else "",
+        "stdout_classification": stdout_classification,
+        "removed_helper_scripts": removed_helpers,
+    })
     save_state(state_path, state)
     return {
         "returncode": completed.returncode,
-        "log": str(log_path),
-        "metrics": str(metrics_path),
-        "worker_proof": compact_worker_proof(metrics, metrics_path),
+        "log": str(log_path) if keep_debug else "",
+        "metrics": str(metrics_path) if keep_debug else "",
+        "worker_proof": compact_worker_proof(metrics, metrics_path if keep_debug else None),
         "artifact_dir": str(artifact_dir),
         "worker_result": str(result_path),
         "stdout_classification": stdout_classification,
@@ -2229,9 +2369,9 @@ def command_metrics(args: argparse.Namespace) -> int:
     state = load_state(Path(args.state).resolve())
     artifact_dir = Path(state["artifact_dir"])
     metrics_path = Path(args.metrics).resolve() if args.metrics else artifact_dir / "worker-run-metrics.json"
-    metrics = read_json(metrics_path)
+    metrics = read_json(metrics_path) if metrics_path.exists() else state.get("latest_worker_run")
     if not isinstance(metrics, dict):
-        raise SystemExit(f"worker metrics not found or invalid: {metrics_path}")
+        raise SystemExit(f"worker metrics not found or invalid: {metrics_path}; latest_worker_run is also unavailable")
     print(json.dumps(metrics, ensure_ascii=False, indent=2))
     return 0
 

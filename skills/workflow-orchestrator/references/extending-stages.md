@@ -4,8 +4,9 @@
 
 1. `requirement-analysis`
 2. `design-phase`
+3. `backend-development`
 
-后续补充原型、编码、自测等阶段时，按本文件扩展。不要只改 `SKILL.md` 文案；必须让脚本、子 skill、validator 和 handoff 同步存在。
+后续补充原型、前端编码、自测等阶段时，按本文件扩展。不要只改 `SKILL.md` 文案；必须让脚本、子 skill、validator 和 handoff 同步存在。
 
 ## 新增阶段前提
 

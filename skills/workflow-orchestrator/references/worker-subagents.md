@@ -7,7 +7,7 @@ worker 内部 subAgent 是可选优化，用来减少 worker 自身上下文污�
 - 普通阶段先不启用 subAgent，保持 worker 简洁。
 - 当阶段包含大量 ticket、网页、文档、代码检索、MCP 查询、候选 API 查找或风险审查时，主流程可以内部启用 worker subAgent。
 - 如果用户明确要求“不使用 subAgent / 只用单 worker”，主流程不要启用 worker subAgent。
-- 是否启用必须记录在 `workflow-state.json.worker_subagents_enabled` 和 `worker-run-metrics.json.worker_subagents_enabled` 中，便于审计。
+- 是否启用必须记录在 `workflow-state.json.worker_subagents_enabled` 和 `workflow-state.json.latest_worker_run.worker_subagents_enabled` 中，便于审计。
 
 ## 默认 SubAgent
 
@@ -27,7 +27,7 @@ worker 内部 subAgent 是可选优化，用来减少 worker 自身上下文污�
 
 不要把 subAgent 当成 `claude -p` worker 的默认替代品。
 
-`claude -p` 是独立 CLI 进程，适合承担完整阶段：它有独立上下文、独立权限参数、可审计命令、`worker-run-metrics.json`、`worker-cli-output.log` 和明确的文件交接边界。它的缺点是启动成本更高，权限和路径配置更敏感，遇到 Bash 拒绝或 max-turns 截断时需要恢复机制兜底。
+`claude -p` 是独立 CLI 进程，适合承担完整阶段：它有独立上下文、独立权限参数、可审计命令、`workflow-state.json.latest_worker_run` 和明确的文件交接边界。它的缺点是启动成本更高，权限和路径配置更敏感，遇到 Bash 拒绝或 max-turns 截断时需要恢复机制兜底；需要完整 prompt/log/metrics 排障时再设置 `WORKFLOW_KEEP_WORKER_DEBUG=1`。
 
 subAgent 更适合在一个 worker 内做局部检索或审查：启动轻、上下文隔离感更强、适合并行读材料。但它通常仍依附当前 Claude Code 会话和工具环境，不应该拥有阶段状态机；如果让 subAgent 直接写 handoff、validation 或 workflow state，审计边界会变模糊，也更容易把主 session 拉回业务执行。
 
@@ -37,6 +37,7 @@ subAgent 更适合在一个 worker 内做局部检索或审查：启动轻、上
 - 当阶段只是短小、只读、无文件交接时，可以考虑 subAgent，但这不适用于 requirement-analysis/design-phase 这类完整阶段。
 - 当 `claude -p` 主要问题是权限配置，优先修正 allowed tools、路径和 worker prompt；不要用 subAgent 绕过权限问题。
 - 当主要问题是 worker 内检索材料太多，再在 `claude -p` worker 内启用 subAgent，把噪声摘要交回父 worker。
+- 在 `backend-development` 中，subAgent 可以用于代码结构分析、实现覆盖审查和测试失败分析；最终代码修改、构建测试和 `backend-code-result.json` 仍由父 worker 负责。
 
 ## 和主 Session 的关系
 

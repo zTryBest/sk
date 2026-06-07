@@ -22,7 +22,7 @@ description: >
 - 用户明确要求“全自动流程”“自动完成所有阶段”“不要人工确认”时，初始化必须使用 `--full-auto`。全自动不是跳过问题，而是由独立 AI auto-decision worker 多轮复核后把答案写入 `decisions.jsonl`。
 - 用户没有说明全自动或人工阶段时，默认确认策略是：`requirement-analysis` 需要人工确认，其他阶段使用 AI 自动确认。也就是需求澄清、需求产物进入方案设计前必须停给用户；方案设计及后续阶段的普通确认点默认由 auto-decision worker 审计后确认。
 - 用户可以自然语言指定人工确认阶段，例如“需求分析和方案设计都人工确认”“只有方案设计人工确认”“需求分析人工，后面自动”。主流程初始化时映射为 `--manual-confirm-stages <stage-list>`；如果用户指定某阶段自动确认，映射为 `--ai-confirm-stages <stage-list>`。
-- 当前仓库只启用 `requirement-analysis` 和 `design-phase` 两个阶段。`design-phase` 通过 validator 后，workflow 标记为 `COMPLETED`，不要继续启动原型、编码或自测阶段。
+- 当前仓库启用 `requirement-analysis`、`design-phase`、`backend-development` 三个阶段。`backend-development` 通过 validator 后，workflow 标记为 `COMPLETED`；当前不要继续启动原型、前端编码或自测阶段。
 
 ## 核心契约
 
@@ -36,8 +36,9 @@ description: >
 - worker 写文件优先使用 Write/Edit/MultiEdit 或结构化 Python serializer。禁止用 shell heredoc、`cat > file`、`echo ... > file` 或把大段 JSON 嵌进 `python -c "..."`；遇到 Bash 权限拒绝时立即换工具或写 `worker-result.json(status=BLOCKED)`，不要反复消耗 turns。
 - 如果 worker 因 max-turns 被截断但已经留下 `pending-questions.json` 或 `worker-checkpoint.json`，orchestrator 可以自动恢复到 `NEED_USER_INPUT` 或 `READY`。同一 pending/checkpoint 重复恢复超过上限后才标记 `BLOCKED`，避免死循环。
 - 如果 worker 因 max-turns 被截断但已经留下阶段草稿或 handoff Markdown，orchestrator 恢复为 `READY` 并标记 `finalize-recovery`；下一轮只启动收尾 worker 补 `*-handoff.json`、`*-validation.json` 和 `worker-result.json`，主 session 不读取大文档手动收尾。
+- `finalize-recovery` worker 不能重新抓取 ticket URL、重新 WebFetch、重新启动 Playwright/MCP、重新 SSO 登录或重跑完整阶段；它只读取已有产物、output contracts 和 validator 来补机器交接文件。
 - 如果只在 `worker-cli-output.log` 里看到了完整 handoff，但没有 pending/checkpoint/可收尾产物，主 session 也不能从日志手工抽 JSON 补交接文件；应重新调度 worker、调整 worker 权限或标记 `BLOCKED`。
-- 用户回答或主流程完成外部动作后，主 session 只能写 `decisions.jsonl` 或 `external-result.json`，然后重新调用 `run-loop` 拉起 worker。禁止在主 session 里继续执行 requirement-analysis 或 design-phase。
+- 用户回答或主流程完成外部动作后，主 session 只能写 `decisions.jsonl` 或 `external-result.json`，然后重新调用 `run-loop` 拉起 worker。禁止在主 session 里继续执行 requirement-analysis、design-phase 或 backend-development。
 - 全自动模式下，主 session 不替 worker 执行业务阶段；它只在 `NEED_USER_INPUT` 时调度 auto-decision worker。auto-decision worker 必须输出可审计决策，不能直接改阶段产物。
 - 重新 `run-loop` 不是恢复同一个进程，而是启动新的隔离 worker。worker 必须根据 `worker-checkpoint.json`、`decisions.jsonl`、`external-result.json` 断点继续，不能重复已经完成的步骤。
 - 阶段边界是否人工确认由 `manual_confirmation_stages` 决定。默认只有 `requirement-analysis` 在阶段内部确认点和阶段完成边界停给用户；其他阶段的确认点由 AI 自动确认。
@@ -64,7 +65,7 @@ description: >
 - `worker-result.json` 的 `status`、`summary`、`next_action` 和产物路径。
 - `pending-questions.json` 中需要问用户的问题。
 - `decisions.jsonl` 中用户刚回答的决策。
-- `status` / `audit` / `metrics` 的 worker 证明摘要。
+- `status` / `audit` 的 worker 证明摘要；默认来自 `workflow-state.json.latest_worker_run`。
 - validation 文件里的 `errors`、`warnings` 和 `json_error` 短上下文。
 
 主 session 默认不要读取：
@@ -96,7 +97,7 @@ worker prompt 必须包含：
 - 需要判断 worker 内部是否启用 subAgent、或用户问“subAgent 放在 worker 里有没有必要”时，读 `references/worker-subagents.md`。
 - 需要解释或排障全自动确认时，读 `references/full-auto.md`。
 - 需要排障脚本定位、Windows 编码、`claude -p` 权限、内部命令或 run-loop 行为时，读 `references/internal-script-operations.md`。
-- 后续要增加原型、编码、自测等阶段时，读 `references/extending-stages.md`。
+- 后续要增加原型、前端编码、自测等阶段时，读 `references/extending-stages.md`。
 
 ## AskQuestion 规则
 
@@ -106,9 +107,10 @@ worker prompt 必须包含：
 
 - 主 session 没有读取或复述完整需求/设计/代码大文档。
 - 每个阶段都有 `worker-result.json`。
-- 通过 worker 执行的阶段都有 `worker-run-metrics.json`。
+- 通过 worker 执行的阶段都有 `workflow-state.json.latest_worker_run`；只有设置 `WORKFLOW_KEEP_WORKER_DEBUG=1` 时才额外保留 `worker-run-metrics.json`、`worker-prompt.md` 和 `worker-cli-output.log`。
 - worker 被截断时，如果存在 pending/checkpoint，状态已通过恢复机制处理；如果同一恢复签名反复出现，流程会停止而不是无限加 turns。
 - 需要人工确认时，问题来自 `pending-questions.json`，回答写入 `decisions.jsonl`。
+- 任何 `NEED_USER_INPUT` 状态都必须存在 `pending-questions.json` 和 `worker-result.json(status=NEED_USER_INPUT)`；精简产物只针对调试文件，不能省略人工确认协议文件。
 - 每个阶段完成前对应 validation 为 `success=true`。
 - `workflow-state.json` 的 `current_stage`、`stage_status`、`latest_handoff`、`latest_validation` 已更新。
 - worker 审计结论能说明最近一次阶段是否由独立 `claude -p` 调用完成。

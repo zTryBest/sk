@@ -41,18 +41,36 @@ json.load(path.open(encoding="utf-8"))
 workflow-state.json
 workflow-input.json
 decisions.jsonl
-worker-prompt.md
 worker-result.json
-pending-questions.json
-worker-run-metrics.json
 ```
 
-## 按需文件
+## 按状态必备文件
+
+这些文件不是每轮都生成，但一旦进入对应状态就是必需文件，不能为了精简产物省略。
 
 ```text
+pending-questions.json
 worker-checkpoint.json
 external-action.json
 external-result.json
+auto-decisions.jsonl
+```
+
+- `pending-questions.json`：任何 `NEED_USER_INPUT` 都必须写。人工确认模式下主流程读取它向用户提问；全自动模式下 auto-decision worker 也读取它生成 AI 决策。
+- `worker-checkpoint.json`：worker 暂停、等待用户、等待外部动作或准备续跑时必须写，确保用户回答后能重新启动一个子 worker 并从断点继续。
+- `external-action.json` / `external-result.json`：只在需要主流程完成浏览器登录、人机验证、文件选择或外部系统动作时生成。
+- `auto-decisions.jsonl`：只有 AI 自动确认实际发生时生成。
+
+## 调试文件
+
+默认不生成这些文件。需要排障或审计完整 CLI 输出时，设置 `WORKFLOW_KEEP_WORKER_DEBUG=1`。
+
+```text
+worker-prompt.md
+worker-cli-output.log
+worker-run-metrics.json
+auto-decision-prompt.md
+auto-decision-cli-output.log
 ```
 
 这些文件用于通用“暂停-外部动作-恢复”协议。worker 不能假设自己的浏览器、MCP 连接、临时进程或内存状态能跨 `NEED_USER_INPUT` 保留。
@@ -90,7 +108,7 @@ external-result.json
   "max_auto_decisions": 20,
   "auto_decision_count": 0,
   "recovery_finalize": {
-    "stage": "requirement-analysis|design-phase",
+    "stage": "requirement-analysis|design-phase|backend-development",
     "directory": "<requirements/product dir>",
     "existing_files": [],
     "missing_outputs": [],
@@ -130,8 +148,8 @@ external-result.json
     }
   ],
   "reason": "",
-  "prompt": "auto-decision-prompt.md",
-  "log": "auto-decision-cli-output.log",
+  "prompt": "",
+  "log": "",
   "returncode": 0
 }
 ```
@@ -177,6 +195,10 @@ external-result.json
 - `mixed`：先处理 URL/文档证据，再合并直接文本中的补充说明；冲突时转澄清问题。
 
 ## pending-questions.json
+
+`pending-questions.json` 是人工确认和 AI 自动确认共用的提问协议。只要 worker 或阶段边界把状态置为 `NEED_USER_INPUT`，就必须先写本文件，再写 `worker-result.json(status=NEED_USER_INPUT)`；禁止只写 result 不写 pending，也禁止只写 pending 不写 result。
+
+用户回答后，主流程把答案写入 `decisions.jsonl`，然后重新启动一个隔离子 worker。新 worker 必须读取 `worker-checkpoint.json` 和 `decisions.jsonl`，从断点继续，不要从头重跑已经完成的工作。
 
 ```json
 {
@@ -299,9 +321,11 @@ worker 在任何 `NEED_USER_INPUT`、外部动作、validation retry 或阶段�
 
 `RECOVERED_READY` 只由 orchestrator 在 worker 被截断、缺少正式 `worker-result.json`、但存在可恢复 checkpoint 时写入，用于审计恢复动作；它不是阶段完成状态。
 
-## worker-run-metrics.json
+## latest_worker_run / worker-run-metrics.json
 
-`run-worker` 启动 `claude -p` 后必须写该文件，用于证明 worker 真的被单独调用，并记录 CLI JSON 输出中可提取的用量字段。
+`run-worker` 启动 `claude -p` 后必须在 `workflow-state.json.latest_worker_run` 写轻量摘要，用于证明 worker 真的被单独调用，并记录 CLI JSON 输出中可提取的用量字段。
+
+只有设置 `WORKFLOW_KEEP_WORKER_DEBUG=1` 时，才额外写出同内容的 `worker-run-metrics.json`。
 
 ```json
 {
@@ -312,17 +336,19 @@ worker 在任何 `NEED_USER_INPUT`、外部动作、validation retry 或阶段�
   "ended_at": "",
   "duration_seconds": 0,
   "returncode": 0,
-  "command": [],
-  "prompt_path": "",
-  "log_path": "",
+  "prompt_delivery": "stdin",
+  "command_contains_claude_print": true,
+  "command_resumes_existing_session": false,
+  "command_disables_session_persistence": true,
   "stdout_json_parsed": true,
+  "stdout_classification": "",
   "session_id": "",
   "num_turns": 0,
   "total_cost_usd": 0,
-  "usage": {},
+  "usage_summary": "",
   "worker_subagents_enabled": false,
-  "worker_subagents": []
+  "allowed_subagents": []
 }
 ```
 
-如果 CLI 当前版本没有在 JSON 中返回 token usage，`usage` 可能为空。这不等于 worker 没有隔离；仍可通过 `worker_invocation`、`command`、`started_at`、`duration_seconds`、`returncode` 和独立输出文件证明。
+如果 CLI 当前版本没有在 JSON 中返回 token usage，`usage_summary` 可能为空。这不等于 worker 没有隔离；仍可通过 `worker_invocation`、`command_contains_claude_print`、`command_disables_session_persistence`、`started_at`、`duration_seconds` 和 `returncode` 证明。
