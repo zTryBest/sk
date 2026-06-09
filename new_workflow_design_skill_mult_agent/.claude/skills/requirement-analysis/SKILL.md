@@ -81,9 +81,11 @@ URL 或需登录页面按 `references/input-fetching.md` 抓取。无法抓取�
 
 **严格按 `references/analysis-rules.md` Phase 4 澄清门禁执行。**
 
-关键澄清点未解决时：
-- 设置 `status=draft`。
-- 在 `open_questions` 中写稳定 id、问题、已知事实、可选项、推荐项和影响范围。
+关键规则：
+- **一个 OQ 只问一个独立问题，不合并多个问题。**
+- **推荐选项必须是具体可采纳的值（如版本号、接口路径），不允许概括性描述。**
+- 每个 OQ 提供 2-3 个具体可选项。
+- 关键澄清点未解决时设置 `status=draft`。
 - 每批最多 4 个问题。
 
 ### Step 5: 输出 artifact

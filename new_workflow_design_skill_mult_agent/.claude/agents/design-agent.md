@@ -47,6 +47,7 @@ tools:
 - 不跳过 MCP baseline API 查询（有 MCP 工具时）。
 - 不写 `.ai-dev/` 下的流程控制文件。
 - 不调度其他 Agent。
+- **MCP 调用规则：直接使用 `mcp__knowledge-base__*` 工具，严禁通过 Bash/Python/curl 间接调用 MCP。** MCP 工具和 Read/Write 一样是原生工具，直接调用即可。
 
 ## REVISE 重新调度
 

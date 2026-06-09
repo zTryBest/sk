@@ -70,9 +70,11 @@ artifacts/01_requirement.json
 
 ### Step 4: knowledge-base MCP 查询
 
-**严格按 `references/mcp-baseline-rules.md` 执行。直接调用 MCP 服务工具，不走命令行。**
+**严格按 `references/mcp-baseline-rules.md` 执行。**
 
-通过 `mcp__knowledge-base__*` 工具直接调用：
+**调用方式：直接使用 `mcp__knowledge-base__*` 原生工具，与 Read/Write/Grep 同级。严禁通过 Bash、Python 脚本或 curl 命令间接调用 MCP。**
+
+可用工具：
 
 ```
 mcp__knowledge-base__health_check()

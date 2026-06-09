@@ -2,7 +2,16 @@
 
 ## MCP 服务：knowledge-base
 
-通过 `mcp__knowledge-base__*` 前缀直接调用 MCP 服务能力，不走命令行脚本。
+通过 `mcp__knowledge-base__*` 前缀直接调用 MCP 服务能力。
+
+**严禁通过 Bash/命令行/Python 脚本调用 MCP。** MCP 工具是 Claude Code 的原生工具，像 Read、Write、Grep 一样直接调用即可。以下行为是错误的：
+- ❌ `Bash("python -c 'import subprocess; ...'")` 
+- ❌ `Bash("curl http://localhost:xxx/mcp/...")`
+- ❌ 任何通过 Bash 工具间接调用 MCP 的方式
+
+正确做法是直接使用 MCP 工具：
+- ✅ 直接调用 `mcp__knowledge-base__health_check()`
+- ✅ 直接调用 `mcp__knowledge-base__find_apis_for_requirement({...})`
 
 ## 可用工具
 
@@ -18,7 +27,9 @@ mcp__knowledge-base__get_api_detail(component_id, segment_id, component_version,
 mcp__knowledge-base__submit_component_version_doc_mapping(...)
 ```
 
-不要调用旧版搜索类或候选提交类工具。不要通过 Bash 命令行调用 MCP。
+不要调用旧版搜索类或候选提交类工具。
+
+**再次强调：所有 MCP 调用必须作为原生工具直接使用，严禁通过 Bash、Python、curl 或任何命令行方式间接调用。**
 
 ## 高准确率原则
 
