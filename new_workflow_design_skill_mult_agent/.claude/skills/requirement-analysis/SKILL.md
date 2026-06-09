@@ -39,7 +39,7 @@ description: >
 
 ### Step 1: 获取输入内容
 
-**如果输入包含 URL（http/https 开头），必须先读取 `references/input-fetching.md` 并严格执行其中的抓取决策树。** 不允许跳过直接要求用户粘贴。
+**强制规则（无条件）：如果输入包含 URL（http/https 开头），你的下一个工具调用必须是 `Read .claude/skills/requirement-analysis/references/input-fetching.md`。** 读完后严格按其中的 4 步决策树执行。不允许跳过、不允许仅凭 WebFetch 失败就放弃、不允许在没调用 Playwright MCP 的情况下输出 `fetch_status=blocked_*`。
 
 抓取决策树摘要（完整规则见 reference）：
 1. 先用 WebFetch 轻量抓取。

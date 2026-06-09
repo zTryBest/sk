@@ -66,7 +66,7 @@ Agent(
 )
 ```
 
-**不要自己去抓 URL 或分析需求内容。把 URL 原样放进 prompt 让 sub-agent 处理。**
+**不要自己去抓 URL 或分析需求内容。把 URL 原样放进 prompt 让 sub-agent 处理。** 抓取方法、决策树、OQ 编号格式等执行细节由 RequirementAgent 自己的定义文件和 skill 约束，orchestrator 不需要知道。
 
 ### 3. 恢复逻辑
 

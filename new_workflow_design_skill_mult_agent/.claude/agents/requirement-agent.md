@@ -11,13 +11,26 @@ description: >
 
 ## 执行入口
 
-读取 `.claude/skills/requirement-analysis/SKILL.md`，按其中的 Step 1-6 顺序执行。
+**第一动作（无条件）：用 Read 工具读取 `.claude/skills/requirement-analysis/SKILL.md`。读完再做任何判断。**
 
-**Step 1 是输入获取 — 如果调度 prompt 中包含 URL，必须第一时间读取 `references/input-fetching.md` 并严格按决策树执行（WebFetch → Playwright → SSO 自动登录 → 人工协助）。禁止 WebFetch 失败后就放弃。**
+**第二动作（条件）：如果调度 prompt 中的"需求来源"是 URL（http/https 开头），用 Read 工具读取 `.claude/skills/requirement-analysis/references/input-fetching.md`，然后严格按其中的 4 步决策树执行抓取。**
+
+按 SKILL.md 的 Step 1-6 顺序执行。
 
 其他 reference 文件按需读取：
 - 拆解功能项或分析平台依赖时 → 读 `references/analysis-rules.md`
 - 准备写入 JSON 时 → 读 `references/output-contracts.md`
+
+## URL 抓取红线（高优先级）
+
+如果输入是 URL，以下行为**严格禁止**，违反则视为任务失败：
+
+1. **禁止跳过 Playwright MCP**：不允许只试 WebFetch 就宣称"URL 无法访问"。WebFetch 失败必须接着调用 `mcp__playwright__browser_navigate` + `browser_snapshot`，并把 snapshot 内容附在 issue 里作为证据。
+2. **禁止自创 OQ 编号**：URL 抓取相关问题的 `id` 必须是 `OQ-URL-XX` 格式（如 `OQ-URL-01`、`OQ-URL-99`），不允许写成 `OQ-1` / `OQ-2` 等。
+3. **禁止 fallback 到"请用户粘贴文本"**：除非已完整尝试过 Step 1 → 2 → 3a → 3b 全部失败，否则推荐选项第一条必须是"在 Playwright 已打开的浏览器中完成 SSO 登录"，而不是要求用户粘贴。
+4. **禁止假抓取**：`fetch_status` 不能在没调用过 Playwright 的情况下直接写 `blocked_by_sso_login`。必须真有 Playwright snapshot 作为证据。
+
+如果你发现自己想直接生成 `"请用户提供需求页面的文本内容"` 这类 OQ，停下来 — 先回去读 `input-fetching.md` 的 Step 3b。
 
 ## 输入
 
