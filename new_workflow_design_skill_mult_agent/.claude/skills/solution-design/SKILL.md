@@ -100,7 +100,7 @@ mcp__knowledge-base__submit_component_version_doc_mapping(...)
 
 **严格按 `references/output-contracts.md` 的 JSON Schema 和写入规则执行。**
 
-输出 `artifacts/02_solution.json`，使用 JSON serializer 写入后立即 `json.load` 校验。
+输出 `artifacts/02_solution.json`，使用 Write 工具直接写入，写入后用 Read 工具读回验证格式正确。不要通过 Bash/Python 写入或校验。
 
 ## 完成标准
 

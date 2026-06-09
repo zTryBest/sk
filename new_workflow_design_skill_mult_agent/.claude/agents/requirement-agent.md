@@ -23,7 +23,7 @@ tools:
 读取 `.claude/skills/requirement-analysis/SKILL.md`，按其中的 Step 1-5 顺序执行。
 
 reference 文件按需读取，不要一次性全部读取：
-- 有 URL 需要抓取时 → 读 `references/input-fetching.md`
+- **输入包含 URL 时（必须第一时间读取）** → 读 `references/input-fetching.md`，严格按决策树执行抓取
 - 拆解功能项或分析平台依赖时 → 读 `references/analysis-rules.md`
 - 准备写入 JSON 时 → 读 `references/output-contracts.md`
 

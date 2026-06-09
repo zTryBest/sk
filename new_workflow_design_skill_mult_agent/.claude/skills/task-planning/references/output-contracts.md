@@ -120,8 +120,8 @@ artifacts/04_plan.json
 
 ## 写入规则
 
-- 使用 `json.dump(..., ensure_ascii=False, indent=2)` 或等价 serializer。
-- 写完立即用 `json.load` 重新读取验证。
+- 使用 Write 工具直接写入 JSON 文件，不要通过 Bash/Python 写入。
+- 写完后用 Read 工具重新读取文件，确认 JSON 格式正确。
 - 不输出非本阶段约定的文件。
 - `status=final` 时 `open_decisions` 必须为空。
 - 每个 interface_contract 必须有至少一个 provider_task 和 consumer_task。

@@ -63,17 +63,15 @@ artifacts/02_solution.json
 
 ## 写入规则
 
-- 使用 `json.dump(..., ensure_ascii=False, indent=2)` 或等价 serializer。
-- 写完立即用 `json.load` 重新读取。
+- 使用 Write 工具直接写入 JSON 文件，不要通过 Bash/Python 写入。
+- 写完后用 Read 工具重新读取文件，确认 JSON 格式正确。
 - 不要输出非本阶段约定的历史设计文件或流程控制文件。
 - `status=final` 时 `open_decisions` 必须为空。
 - 使用 baseline API 时，必须写入 MCP 证据（通过 `mcp__knowledge-base__get_api_detail` 获取）和 API 详情契约。
 
 ## 校验
 
-```text
-python scripts/validate_solution.py --input artifacts/02_solution.json
-```
+写入后用 Read 工具重新读取文件验证 JSON 完整性。不要通过 Bash 运行 Python 脚本校验。
 
 ## 完成检查
 
