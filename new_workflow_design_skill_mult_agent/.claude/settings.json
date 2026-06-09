@@ -1,0 +1,65 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p .ai-dev*)",
+      "Bash(mkdir -p artifacts*)",
+      "Bash(mkdir -p workspace*)",
+      "Bash(mkdir -p .ai-dev/memory*)",
+
+      "Bash(git status)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git remote:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git fetch:*)",
+
+      "Bash(claude mcp list)",
+      "Bash(claude mcp list:*)",
+      "Bash(claude mcp add:*)",
+      "Bash(claude mcp remove:*)",
+
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(pwd)",
+
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_navigate_back",
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_fill_form",
+      "mcp__playwright__browser_type",
+      "mcp__playwright__browser_select_option",
+      "mcp__playwright__browser_hover",
+      "mcp__playwright__browser_press_key",
+      "mcp__playwright__browser_wait_for",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_evaluate",
+      "mcp__playwright__browser_console_messages",
+      "mcp__playwright__browser_network_requests",
+      "mcp__playwright__browser_resize",
+      "mcp__playwright__browser_close",
+      "mcp__playwright__browser_tabs",
+      "mcp__playwright__browser_handle_dialog",
+      "mcp__playwright__browser_drag",
+
+      "mcp__knowledge-base__health_check",
+      "mcp__knowledge-base__list_products",
+      "mcp__knowledge-base__list_product_components",
+      "mcp__knowledge-base__list_component_segments",
+      "mcp__knowledge-base__list_component_doc_versions",
+      "mcp__knowledge-base__resolve_component_doc_version",
+      "mcp__knowledge-base__find_apis_for_requirement",
+      "mcp__knowledge-base__get_api_detail",
+      "mcp__knowledge-base__submit_component_version_doc_mapping",
+
+      "WebSearch"
+    ]
+  }
+}

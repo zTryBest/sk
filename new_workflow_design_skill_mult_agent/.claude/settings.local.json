@@ -1,39 +1,5 @@
 {
   "permissions": {
-    "allow": [
-      "Bash(mkdir -p .claude/skills/workflow-orchestrator/references)",
-      "Bash(mkdir -p .claude/skills/prototype-design/references)",
-      "Bash(mkdir -p .claude/skills/task-planning/references)",
-      "Bash(mkdir -p .claude/skills/backend-coding/references)",
-      "Bash(mkdir -p .claude/skills/frontend-coding/references)",
-      "Bash(xargs grep -l \"subagent_type\\\\|agent.*type\")",
-      "Bash(xargs grep -l \"RequirementAgent\\\\|DesignAgent\\\\|BackendAgent\\\\|FrontendAgent\")",
-      "Bash(xargs grep -l \"agent.*registry\\\\|agent.*config\\\\|agent.*map\")",
-      "WebFetch(domain:docs.claude.com)",
-      "WebSearch",
-      "WebFetch(domain:skywork.ai)",
-      "WebFetch(domain:www.tembo.io)",
-      "WebFetch(domain:www.techiediaries.com)",
-      "WebFetch(domain:wmedia.es)",
-      "WebFetch(domain:opentools.ai)",
-      "WebFetch(domain:docs.anthropic.com)",
-      "WebFetch(domain:alexop.dev)",
-      "WebFetch(domain:amitkoth.com)",
-      "WebFetch(domain:handbook.reopt.ai)",
-      "WebFetch(domain:thepromptshelf.dev)",
-      "WebFetch(domain:claude.yourdocs.dev)",
-      "WebFetch(domain:claude-codex.fr)",
-      "WebFetch(domain:github.com)",
-      "WebFetch(domain:workinbeta.beehiiv.com)",
-      "WebFetch(domain:www.anthropic.com)",
-      "WebFetch(domain:medium.com)",
-      "WebFetch(domain:fkxx.substack.com)",
-      "WebFetch(domain:movez.substack.com)",
-      "WebFetch(domain:developertoolkit.ai)",
-      "Bash(claude mcp *)",
-      "Bash(git add *)",
-      "Bash(git commit -m ' *)",
-      "Bash(git push *)"
-    ]
+    "allow": []
   }
 }
