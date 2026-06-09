@@ -20,10 +20,11 @@ tools:
 
 ## 执行入口
 
-读取 `.claude/skills/requirement-analysis/SKILL.md`，按其中的 Step 1-5 顺序执行。
+读取 `.claude/skills/requirement-analysis/SKILL.md`，按其中的 Step 1-6 顺序执行。
 
-reference 文件按需读取，不要一次性全部读取：
-- **输入包含 URL 时（必须第一时间读取）** → 读 `references/input-fetching.md`，严格按决策树执行抓取
+**Step 1 是输入获取 — 如果调度 prompt 中包含 URL，必须第一时间读取 `references/input-fetching.md` 并严格按决策树执行（WebFetch → Playwright → SSO 自动登录 → 人工协助）。禁止 WebFetch 失败后就放弃。**
+
+其他 reference 文件按需读取：
 - 拆解功能项或分析平台依赖时 → 读 `references/analysis-rules.md`
 - 准备写入 JSON 时 → 读 `references/output-contracts.md`
 

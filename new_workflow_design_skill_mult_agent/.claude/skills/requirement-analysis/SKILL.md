@@ -33,13 +33,26 @@ description: >
 - 需求文档路径或文档正文。
 - Human Gate 确认后的补充意见（REVISE 重新调度时）。
 
-URL 或需登录页面按 `references/input-fetching.md` 抓取。无法抓取时输出 draft + open_questions。
-
 ## 执行流程
 
 严格按以下顺序执行，每一步的详细规则见对应 reference 文件。
 
-### Step 1: 提取基础信息
+### Step 1: 获取输入内容
+
+**如果输入包含 URL（http/https 开头），必须先读取 `references/input-fetching.md` 并严格执行其中的抓取决策树。** 不允许跳过直接要求用户粘贴。
+
+抓取决策树摘要（完整规则见 reference）：
+1. 先用 WebFetch 轻量抓取。
+2. 失败（403/SSO/空内容）→ 用 `mcp__playwright__browser_navigate` 打开页面。
+3. 页面需要登录 → 读取 `~/.claude/config/internal-urls.yaml` 配置，用 Playwright MCP 自动登录。
+4. 都失败 → 输出 draft + open_questions 请求人工协助。
+
+**禁止在 WebFetch 失败后直接放弃或要求用户粘贴内容。必须尝试 Playwright MCP 路径。**
+
+如果输入是文档路径，用 Read 工具读取。
+如果输入是用户直接粘贴的文本，直接使用。
+
+### Step 2: 提取基础信息
 
 提取并保留证据来源：
 - `project_name`、`business_goal`
@@ -51,7 +64,7 @@ URL 或需登录页面按 `references/input-fetching.md` 抓取。无法抓取�
 
 `product_id` 和 `product_version` 缺失时只能输出 draft。
 
-### Step 2: 拆解功能需求
+### Step 3: 拆解功能需求
 
 **严格按 `references/analysis-rules.md` 中的功能项模板和拆解深度标准执行。**
 
@@ -67,7 +80,7 @@ URL 或需登录页面按 `references/input-fetching.md` 抓取。无法抓取�
 - P1 至少 4 条验收标准。
 - 异常和边界不能留空。
 
-### Step 3: 平台依赖和数据来源分析
+### Step 4: 平台依赖和数据来源分析
 
 **严格按 `references/analysis-rules.md` Phase 3 的平台依赖类型和目标对象解析规则执行。**
 
@@ -77,7 +90,7 @@ URL 或需登录页面按 `references/input-fetching.md` 抓取。无法抓取�
 
 输出依赖分析表。数据来源不明确时标记 `[待确认]`，不猜成"否"。
 
-### Step 4: 形成 open_questions
+### Step 5: 形成 open_questions
 
 **严格按 `references/analysis-rules.md` Phase 4 澄清门禁执行。**
 
@@ -88,7 +101,7 @@ URL 或需登录页面按 `references/input-fetching.md` 抓取。无法抓取�
 - 关键澄清点未解决时设置 `status=draft`。
 - 每批最多 4 个问题。
 
-### Step 5: 输出 artifact
+### Step 6: 输出 artifact
 
 **严格按 `references/output-contracts.md` 的 JSON Schema 和写入规则执行。**
 
