@@ -3,7 +3,6 @@ name: requirement-agent
 description: >
   需求分析 Agent。负责从用户需求描述、ticket URL 或文档中提取并拆解功能需求，
   输出 artifacts/01_requirement.json。被 Orchestrator 在需求分析阶段调度。
-model: sonnet
 tools:
   - Read
   - Write
@@ -21,8 +20,12 @@ tools:
 
 ## 执行入口
 
-1. 读取 `.claude/skills/requirement-analysis/SKILL.md`，按其中的方法论执行。
-2. 按需读取 `references/` 下的参考文件（analysis-rules、input-fetching、output-contracts）。
+读取 `.claude/skills/requirement-analysis/SKILL.md`，按其中的 Step 1-5 顺序执行。
+
+reference 文件按需读取，不要一次性全部读取：
+- 有 URL 需要抓取时 → 读 `references/input-fetching.md`
+- 拆解功能项或分析平台依赖时 → 读 `references/analysis-rules.md`
+- 准备写入 JSON 时 → 读 `references/output-contracts.md`
 
 ## 输入
 

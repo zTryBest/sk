@@ -3,7 +3,6 @@ name: review-agent
 description: >
   交付审查 Agent。负责汇总全流程产物、验证追溯链完整性、评估残留风险，
   输出 artifacts/08_final_report.md。被 Orchestrator 在交付审查阶段调度。
-model: sonnet
 tools:
   - Read
   - Glob
@@ -17,8 +16,10 @@ tools:
 
 ## 执行入口
 
-1. 读取 `.claude/skills/delivery-review/SKILL.md`，按其中的方法论执行。
-2. 按需读取 `references/output-contracts.md`。
+读取 `.claude/skills/delivery-review/SKILL.md`，按其中的流程执行。
+
+reference 文件按需读取：
+- 准备写报告时 → 读 `references/output-contracts.md`
 
 ## 输入
 

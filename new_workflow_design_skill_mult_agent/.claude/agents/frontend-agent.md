@@ -3,7 +3,6 @@ name: frontend-agent
 description: >
   前端编码 Agent。负责根据任务计划和原型实现前端代码，严格按 interface_contracts 消费 API，
   输出到 workspace/frontend/ 并产出 artifacts/06_frontend_report.md。
-model: sonnet
 tools:
   - Read
   - Write
@@ -21,8 +20,10 @@ tools:
 
 ## 执行入口
 
-1. 读取 `.claude/skills/frontend-coding/SKILL.md`，按其中的方法论执行。
-2. 按需读取 `references/output-contracts.md`。
+读取 `.claude/skills/frontend-coding/SKILL.md`，按其中的流程执行。
+
+reference 文件按需读取：
+- 准备写报告时 → 读 `references/output-contracts.md`
 
 ## 输入
 

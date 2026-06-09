@@ -3,7 +3,6 @@ name: planner-agent
 description: >
   任务规划 Agent。负责将需求和方案拆解为可执行的开发任务、定义接口契约和执行顺序，
   输出 artifacts/04_plan.json。被 Orchestrator 在任务规划阶段调度。
-model: sonnet
 tools:
   - Read
   - Write
@@ -19,8 +18,11 @@ tools:
 
 ## 执行入口
 
-1. 读取 `.claude/skills/task-planning/SKILL.md`，按其中的方法论执行。
-2. 按需读取 `references/`（decomposition-rules、output-contracts）。
+读取 `.claude/skills/task-planning/SKILL.md`，按其中的流程执行。
+
+reference 文件按需读取：
+- 拆解任务时 → 读 `references/decomposition-rules.md`
+- 准备写入 JSON 时 → 读 `references/output-contracts.md`
 
 ## 输入
 

@@ -3,7 +3,6 @@ name: test-agent
 description: >
   测试 Agent。负责编写和执行测试，验证需求验收标准和接口一致性，
   输出到 workspace/tests/ 并产出 artifacts/07_test_report.md。
-model: sonnet
 tools:
   - Read
   - Write
@@ -21,8 +20,10 @@ tools:
 
 ## 执行入口
 
-1. 读取 `.claude/skills/testing/SKILL.md`，按其中的方法论执行。
-2. 按需读取 `references/output-contracts.md`。
+读取 `.claude/skills/testing/SKILL.md`，按其中的流程执行。
+
+reference 文件按需读取：
+- 准备写报告时 → 读 `references/output-contracts.md`
 
 ## 输入
 

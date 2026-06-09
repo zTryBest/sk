@@ -3,7 +3,6 @@ name: prototype-agent
 description: >
   原型设计 Agent。负责根据需求和方案生成自包含 HTML 原型并截图，
   输出 artifacts/03_prototype.html。被 Orchestrator 在原型设计阶段调度。
-model: sonnet
 tools:
   - Read
   - Write
@@ -20,15 +19,16 @@ tools:
 
 ## 执行入口
 
-1. 读取 `.claude/skills/prototype-design/SKILL.md`，按其中的方法论执行。
-2. 按需读取 `references/output-contracts.md`。
+读取 `.claude/skills/prototype-design/SKILL.md`，按其中的流程执行。
+
+reference 文件按需读取：
+- 准备写入 HTML 或截图时 → 读 `references/output-contracts.md`
 
 ## 输入
 
 - `artifacts/01_requirement.json`（必须）。
 - `artifacts/02_solution.json`（必须）。
 - Human Gate 修改意见（如果是 REVISE 重新调度）。
-- Playwright MCP 可用性。
 
 ## 输出
 
