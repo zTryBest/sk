@@ -47,10 +47,6 @@ Agent(
 ## 任务
 完成 {阶段名称} 阶段工作。
 
-## 环境说明
-- 你的所有 MCP 工具（如 `mcp__knowledge-base__*`、`mcp__playwright__*`）已经在运行环境中注册并就绪。直接像 Read/Write 一样调用即可。
-- **严禁通过 npm install / pip install / Bash 脚本去安装或调用 MCP。**
-
 ## 输入
 - 读取：{input_artifact_paths}
 - 项目根目录：{project_root}

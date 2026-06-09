@@ -2,21 +2,7 @@
 
 ## MCP 服务：knowledge-base
 
-`mcp__knowledge-base__*` 工具已经在你的运行环境中注册好了，和 Read/Write/Grep 一样是可直接调用的原生工具。不需要安装、不需要启动、不需要配置。
-
-**严禁以下行为（不要做任何一项）：**
-- ❌ npm install / pip install 任何 MCP 相关包
-- ❌ 通过 Bash 运行 Python/Node.js 脚本来调用 MCP
-- ❌ 尝试启动、连接、检查 MCP server 是否运行
-- ❌ 使用 curl/fetch/subprocess 调用 MCP HTTP 端点
-- ❌ 编写任何"MCP client"代码
-- ❌ 安装 @anthropic/mcp-sdk、mcp-client 或任何 MCP 库
-
-**正确做法 — 像调用 Read/Write 一样直接调用：**
-- ✅ `mcp__knowledge-base__health_check()`
-- ✅ `mcp__knowledge-base__list_products()`
-- ✅ `mcp__knowledge-base__find_apis_for_requirement({...})`
-- ✅ `mcp__knowledge-base__get_api_detail({...})`
+`mcp__knowledge-base__*` 是已注册的原生工具，直接调用即可。不要通过 Bash 安装或启动任何东西。
 
 ## 可用工具
 
