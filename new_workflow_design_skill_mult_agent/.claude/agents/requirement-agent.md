@@ -38,6 +38,7 @@ description: >
 - 用户项目描述、ticket URL、文档路径或文档正文（由 Orchestrator 在调度 prompt 中提供）。
 - Human Gate 反馈（如果是 REVISE 重新调度）。
 - 项目根目录路径。
+- **历史经验**：调度 prompt 中可能含 `## 历史经验（参考，非强制）` 段，由 Orchestrator 注入项目经验和本 Agent 全局经验。仅供参考，不要当作硬约束、也不要当作 reference 文件路径去读。
 
 ## 输出
 

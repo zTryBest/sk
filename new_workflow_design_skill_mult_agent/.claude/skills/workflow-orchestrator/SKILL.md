@@ -119,8 +119,9 @@ LOOP:
 按 `references/agent-dispatch.md` 中的注册表和模板调度。关键规则：
 
 - 使用 `Agent(subagent_type: "{agent-name}", prompt: "...")` 调度。
-- prompt 中传递：输入 artifact 路径 + 用户原始输入 + Human Gate 反馈（如有）。
+- prompt 中传递：输入 artifact 路径 + 用户原始输入 + Human Gate 反馈（如有）+ **历史经验**（见下）。
 - **用户提供的 URL、文档路径、需求描述等原样放入 prompt，不做任何预处理。**
+- **调度前必须读取并注入历史经验**：按 `references/memory-protocol.md` 第 4 节执行。读取 `.ai-dev/memory/project.md` 和 `~/.claude/memory/agents/{agent-name}.md`，按格式拼到 prompt 的 `## 历史经验（参考，非强制）` 段。
 - Agent 返回后：读取产出的 artifact，检查 status，更新 state.json。
 - 如有 issues，写入 issue-log。
 
@@ -128,9 +129,9 @@ LOOP:
 
 按 `references/human-gate-protocol.md` 执行。核心流程：
 - 展示阶段摘要和产物概要。
-- 如有 open_questions/open_decisions，先展示并收集用户答案。
-- 请求用户选择：APPROVE / REVISE / REJECT。
+- **所有用户决策（APPROVE/REVISE/REJECT、OQ 澄清、blocking 处置、optional 选择）必须用 `AskUserQuestion` 工具收集**，禁止让用户输入关键字或一次性列出所有问题。映射规则、批次拆分、推荐选项标注等见 `references/human-gate-protocol.md`。
 - 记录决策到 decision-log。
+- **APPROVE 后必须按 `references/memory-protocol.md` 执行记忆沉淀**：自动生成项目经验和 Agent 通用经验候选，用 AskUserQuestion 让用户审核每一条，保留的条目追加到对应文件。REVISE/REJECT/SKIP 不沉淀。
 
 ## 编码阶段
 

@@ -35,6 +35,7 @@ reference 文件按需读取：
 - `workspace/backend/` — 后端源码（只读）。
 - `workspace/frontend/` — 前端源码（只读）。
 - 本次负责的测试任务 ID 列表。
+- **历史经验**：调度 prompt 中可能含 `## 历史经验（参考，非强制）` 段，由 Orchestrator 注入项目经验和本 Agent 全局经验。仅供参考，不要当作硬约束、也不要当作 reference 文件路径去读。
 
 ## 输出
 
