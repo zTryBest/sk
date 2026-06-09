@@ -62,7 +62,7 @@ description: >
 ```
 Agent(
   subagent_type: "requirement-agent",
-  prompt: "## 任务\n完成需求分析阶段工作。\n\n## 输入\n- 需求来源：{用户提供的 URL / 文档 / 描述，原样粘贴}\n- 项目根目录：{project_root}\n\n## 输出要求\n完成后汇报：artifact 路径、status、open_questions、摘要、issues"
+  prompt: "## 任务\n完成需求分析阶段工作。\n\n## 环境说明\n你的所有 MCP 工具（mcp__playwright__* 等）已注册就绪，直接调用即可。严禁 npm install / pip install 任何 MCP 相关包。\n\n## 输入\n- 需求来源：{用户提供的 URL / 文档 / 描述，原样粘贴}\n- 项目根目录：{project_root}\n\n## 输出要求\n完成后汇报：artifact 路径、status、open_questions、摘要、issues"
 )
 ```
 

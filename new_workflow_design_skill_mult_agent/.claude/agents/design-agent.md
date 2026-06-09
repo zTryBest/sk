@@ -49,7 +49,15 @@ reference 文件按需读取，不要一次性全部读取：
 - 不跳过 MCP baseline API 查询。
 - 不写 `.ai-dev/` 下的流程控制文件。
 - 不调度其他 Agent。
-- **MCP 调用规则：直接使用 `mcp__knowledge-base__*` 工具，严禁通过 Bash/Python/curl 间接调用 MCP。** MCP 工具和 Read/Write 一样是原生工具，直接调用即可。
+- **MCP 调用规则（严格遵守）：**
+  - `mcp__knowledge-base__*` 工具已经在你的运行环境中注册好了，和 Read/Write/Grep 一样是可直接调用的原生工具。
+  - 直接调用即可，例如：`mcp__knowledge-base__health_check()`、`mcp__knowledge-base__find_apis_for_requirement({...})`。
+  - **严禁以下行为：**
+    - ❌ 通过 Bash 执行 npm install / pip install 任何 MCP 相关包
+    - ❌ 通过 Bash 运行 Python/Node 脚本调用 MCP
+    - ❌ 尝试启动 MCP server 或检查 MCP server 状态
+    - ❌ 使用 curl/fetch 调用 MCP HTTP 端点
+  - MCP 工具不需要安装、不需要启动、不需要配置，它已经就绪。
 
 ## REVISE 重新调度
 

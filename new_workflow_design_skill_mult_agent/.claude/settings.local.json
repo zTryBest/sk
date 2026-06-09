@@ -23,7 +23,13 @@
       "WebFetch(domain:thepromptshelf.dev)",
       "WebFetch(domain:claude.yourdocs.dev)",
       "WebFetch(domain:claude-codex.fr)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:workinbeta.beehiiv.com)",
+      "WebFetch(domain:www.anthropic.com)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:fkxx.substack.com)",
+      "WebFetch(domain:movez.substack.com)",
+      "WebFetch(domain:developertoolkit.ai)"
     ]
   }
 }

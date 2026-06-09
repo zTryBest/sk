@@ -52,6 +52,11 @@ tools:
 - 不写 `.ai-dev/` 下的流程控制文件。
 - 不调度其他 Agent。
 - 遇到阻塞问题，输出 draft + open_questions 返回，由 Orchestrator 处理。
+- **MCP 调用规则（严格遵守）：**
+  - `mcp__playwright__*` 工具已经在你的运行环境中注册好了，和 Read/Write 一样是可直接调用的原生工具。
+  - 直接调用即可（如 `mcp__playwright__browser_navigate(...)`、`mcp__playwright__browser_snapshot()`）。
+  - **严禁通过 Bash 执行 npm install、pip install、playwright install、启动浏览器服务、运行 Python/Node 脚本调用 Playwright。**
+  - MCP 工具不需要安装、不需要启动、不需要配置。
 - **open_questions 质量要求：**
   - 一个 OQ 只问一个独立问题，禁止合并。
   - 推荐选项必须是具体可直接采纳的值（版本号、接口名、具体数值），不允许概括性描述。

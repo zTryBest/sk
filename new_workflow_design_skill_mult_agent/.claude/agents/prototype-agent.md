@@ -48,6 +48,11 @@ reference 文件按需读取：
 - HTML 必须自包含（无外部 CDN 依赖）。
 - 不写 `.ai-dev/` 下的流程控制文件。
 - 不调度其他 Agent。
+- **MCP 调用规则（严格遵守）：**
+  - `mcp__playwright__*` 工具已经在你的运行环境中注册好了，和 Read/Write 一样是可直接调用的原生工具。
+  - 直接调用即可（如 `mcp__playwright__browser_navigate(...)`、`mcp__playwright__browser_take_screenshot()`）。
+  - **严禁通过 Bash 执行 npm install、pip install、playwright install、启动浏览器服务、运行脚本调用 Playwright。**
+  - MCP 工具不需要安装、不需要启动、不需要配置。
 
 ## REVISE 重新调度
 

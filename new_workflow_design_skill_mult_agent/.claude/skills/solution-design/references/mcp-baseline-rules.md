@@ -2,16 +2,21 @@
 
 ## MCP 服务：knowledge-base
 
-通过 `mcp__knowledge-base__*` 前缀直接调用 MCP 服务能力。
+`mcp__knowledge-base__*` 工具已经在你的运行环境中注册好了，和 Read/Write/Grep 一样是可直接调用的原生工具。不需要安装、不需要启动、不需要配置。
 
-**严禁通过 Bash/命令行/Python 脚本调用 MCP。** MCP 工具是 Claude Code 的原生工具，像 Read、Write、Grep 一样直接调用即可。以下行为是错误的：
-- ❌ `Bash("python -c 'import subprocess; ...'")` 
-- ❌ `Bash("curl http://localhost:xxx/mcp/...")`
-- ❌ 任何通过 Bash 工具间接调用 MCP 的方式
+**严禁以下行为（不要做任何一项）：**
+- ❌ npm install / pip install 任何 MCP 相关包
+- ❌ 通过 Bash 运行 Python/Node.js 脚本来调用 MCP
+- ❌ 尝试启动、连接、检查 MCP server 是否运行
+- ❌ 使用 curl/fetch/subprocess 调用 MCP HTTP 端点
+- ❌ 编写任何"MCP client"代码
+- ❌ 安装 @anthropic/mcp-sdk、mcp-client 或任何 MCP 库
 
-正确做法是直接使用 MCP 工具：
-- ✅ 直接调用 `mcp__knowledge-base__health_check()`
-- ✅ 直接调用 `mcp__knowledge-base__find_apis_for_requirement({...})`
+**正确做法 — 像调用 Read/Write 一样直接调用：**
+- ✅ `mcp__knowledge-base__health_check()`
+- ✅ `mcp__knowledge-base__list_products()`
+- ✅ `mcp__knowledge-base__find_apis_for_requirement({...})`
+- ✅ `mcp__knowledge-base__get_api_detail({...})`
 
 ## 可用工具
 
@@ -28,8 +33,6 @@ mcp__knowledge-base__submit_component_version_doc_mapping(...)
 ```
 
 不要调用旧版搜索类或候选提交类工具。
-
-**再次强调：所有 MCP 调用必须作为原生工具直接使用，严禁通过 Bash、Python、curl 或任何命令行方式间接调用。**
 
 ## 高准确率原则
 
