@@ -71,19 +71,22 @@ mcp__playwright__browser_snapshot()
 
 ## Step 3: 处理登录页
 
-### 3.1 读取 SSO 配置
+### 3.1 读取 SSO 配置（必须执行，禁止跳过）
 
-配置文件路径：
+**强制动作：用 Read 工具读取 `~/.claude/config/internal-urls.yaml`。Read 工具会自动解析 `~`，Windows 上也用这个路径。不要用 Bash cat，不要凭空假设凭证缺失。**
 
-Windows:
-```
-%USERPROFILE%\.claude\config\internal-urls.yaml
-```
+Read 必须真的发生。返回结果按以下分支处理：
 
-WSL/Linux:
-```
-~/.claude/config/internal-urls.yaml
-```
+| Read 结果 | 走哪条 | 必须留的证据 |
+|---|---|---|
+| 文件不存在（ENOENT / no such file） | Step 3b | issues 中记录 `yaml_path_attempted: "~/.claude/config/internal-urls.yaml"` + `yaml_status: "not_found"` |
+| 文件存在但 `sso_username` / `sso_password` / `sso_selectors.*` 任一为空 | Step 3b | issues 中记录 `yaml_status: "incomplete"` + 列出哪些字段为空 |
+| 全部字段非空 | **Step 3a 自动填表（不允许跳到 3b）** | 在 fetch_status 里写 `sso_auto_login_attempted: true` |
+
+**违反约束的表现（任一即任务失败）：**
+- 输出 "SSO 拦截无法抓取" 但 issues 里没有 yaml 读取结果
+- yaml 字段齐全却走 Step 3b 引导手动登录
+- 用 Bash `cat` / `grep` 替代 Read 工具读取 yaml
 
 字段：
 ```yaml

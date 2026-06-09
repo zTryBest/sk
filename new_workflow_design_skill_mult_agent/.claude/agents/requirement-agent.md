@@ -26,11 +26,12 @@ description: >
 如果输入是 URL，以下行为**严格禁止**，违反则视为任务失败：
 
 1. **禁止跳过 Playwright MCP**：不允许只试 WebFetch 就宣称"URL 无法访问"。WebFetch 失败必须接着调用 `mcp__playwright__browser_navigate` + `browser_snapshot`，并把 snapshot 内容附在 issue 里作为证据。
-2. **禁止自创 OQ 编号**：URL 抓取相关问题的 `id` 必须是 `OQ-URL-XX` 格式（如 `OQ-URL-01`、`OQ-URL-99`），不允许写成 `OQ-1` / `OQ-2` 等。
-3. **禁止 fallback 到"请用户粘贴文本"**：除非已完整尝试过 Step 1 → 2 → 3a → 3b 全部失败，否则推荐选项第一条必须是"在 Playwright 已打开的浏览器中完成 SSO 登录"，而不是要求用户粘贴。
-4. **禁止假抓取**：`fetch_status` 不能在没调用过 Playwright 的情况下直接写 `blocked_by_sso_login`。必须真有 Playwright snapshot 作为证据。
+2. **禁止跳过 yaml 读取**：检测到登录页后，**必须**用 Read 工具读 `~/.claude/config/internal-urls.yaml`。issues 里必须留下 `yaml_status` 字段（`not_found` / `incomplete` / `complete`）。yaml 凭证齐全时必须走自动填表（Step 3a），禁止跳到 3b。
+3. **禁止自创 OQ 编号**：URL 抓取相关问题的 `id` 必须是 `OQ-URL-XX` 格式（如 `OQ-URL-01`、`OQ-URL-99`），不允许写成 `OQ-1` / `OQ-2` 等。
+4. **禁止 fallback 到"请用户粘贴文本"**：除非已完整尝试过 Step 1 → 2 → 3a → 3b 全部失败，否则推荐选项第一条必须是"在 Playwright 已打开的浏览器中完成 SSO 登录"，而不是要求用户粘贴。
+5. **禁止假抓取**：`fetch_status` 不能在没调用过 Playwright 的情况下直接写 `blocked_by_sso_login`。必须真有 Playwright snapshot 作为证据。
 
-如果你发现自己想直接生成 `"请用户提供需求页面的文本内容"` 这类 OQ，停下来 — 先回去读 `input-fetching.md` 的 Step 3b。
+如果你发现自己想直接生成 `"请用户提供需求页面的文本内容"` 这类 OQ，停下来 — 先回去读 `input-fetching.md` 的 Step 3.1 和 3a。
 
 ## 输入
 
