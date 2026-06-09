@@ -3,14 +3,6 @@ name: design-agent
 description: >
   方案设计 Agent。负责基于 artifacts/01_requirement.json 产出架构、模块、数据模型、接口和 baseline API 方案，
   输出 artifacts/02_solution.json。被 Orchestrator 在方案设计阶段调度。
-tools:
-  - Read
-  - Write
-  - Edit
-  - Glob
-  - Grep
-  - Bash
-  - mcp__knowledge-base__*
 ---
 
 # DesignAgent

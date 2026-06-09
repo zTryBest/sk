@@ -3,14 +3,6 @@ name: prototype-agent
 description: >
   原型设计 Agent。负责根据需求和方案生成自包含 HTML 原型并截图，
   输出 artifacts/03_prototype.html。被 Orchestrator 在原型设计阶段调度。
-tools:
-  - Read
-  - Write
-  - Edit
-  - Glob
-  - Grep
-  - Bash
-  - mcp__playwright__*
 ---
 
 # PrototypeAgent

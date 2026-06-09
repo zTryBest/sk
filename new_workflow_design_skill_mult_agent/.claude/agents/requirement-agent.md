@@ -3,15 +3,6 @@ name: requirement-agent
 description: >
   需求分析 Agent。负责从用户需求描述、ticket URL 或文档中提取并拆解功能需求，
   输出 artifacts/01_requirement.json。被 Orchestrator 在需求分析阶段调度。
-tools:
-  - Read
-  - Write
-  - Edit
-  - Glob
-  - Grep
-  - Bash
-  - WebFetch
-  - mcp__playwright__*
 ---
 
 # RequirementAgent

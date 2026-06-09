@@ -29,7 +29,10 @@
       "WebFetch(domain:medium.com)",
       "WebFetch(domain:fkxx.substack.com)",
       "WebFetch(domain:movez.substack.com)",
-      "WebFetch(domain:developertoolkit.ai)"
+      "WebFetch(domain:developertoolkit.ai)",
+      "Bash(claude mcp *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
