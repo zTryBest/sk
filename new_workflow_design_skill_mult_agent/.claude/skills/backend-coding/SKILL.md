@@ -60,15 +60,18 @@ artifacts/02_solution.json
 
 ### 2. 脚手架
 
-如果是第一次编码（workspace/backend/ 为空）：
-- 创建项目结构。
-- 配置构建工具（Maven/Gradle/npm/...）。
-- 设置数据库连接配置。
-- 创建通用基础类（异常处理、响应包装、日志）。
+如果是第一次编码（`workspace/backend/` 不存在或为空）：
+
+**强制：必须读 `references/scaffold.md` 并严格按其中的 5 步流程执行。** 核心规则：
+- 通过 `mcp__scaffold__generate_backend` 工具拉取，**禁止** Bash curl / wget 直接下载
+- `port` / `error_code` / `package_name` 等业务字段从 `.ai-dev/scaffold-defaults.yaml` 读取，**禁止** LLM 凭空生成
+- `author` / `email` 从 `git config` 取
+- 中间件清单优先调 `mcp__scaffold__list_middleware_options` 实时拉取
 
 如果非首次调度（已有代码）：
 - 读取现有代码结构。
 - 在已有代码基础上新增功能。
+- 跳过 `references/scaffold.md`。
 
 ### 3. 代码实现
 

@@ -32,6 +32,7 @@ reference 文件按需读取：
 - 本次负责的任务 ID 列表（由 Orchestrator 在调度 prompt 中指定）。
 - 项目根目录。
 - Human Gate 修改意见（如果是重新调度）。
+- **脚手架默认配置**：`.ai-dev/scaffold-defaults.yaml`（首次编码时必须读，由 Orchestrator 在调度前用 AskUserQuestion 填好；缺字段时不要凭空猜，REVISE 上报）。
 - **历史经验**：调度 prompt 中可能含 `## 历史经验（参考，非强制）` 段，由 Orchestrator 注入项目经验和本 Agent 全局经验。仅供参考，不要当作硬约束、也不要当作 reference 文件路径去读。
 
 ## 输出
@@ -52,6 +53,19 @@ reference 文件按需读取：
 - 不修改 `workspace/frontend/` 或 `workspace/tests/`。
 - 不写 `.ai-dev/` 下的流程控制文件。
 - 不调度其他 Agent。
+
+## 脚手架获取红线（首次编码必读）
+
+`workspace/backend/` 为空时必须先获取脚手架。以下行为**严格禁止**，违反视为任务失败：
+
+1. **禁止 Bash 拉取脚手架**：不允许 `curl` / `wget` / `Invoke-WebRequest` / `python urllib` 直接调 SpringBoot 脚手架接口。必须用 `mcp__scaffold__generate_backend`。
+2. **禁止凭空猜任何字段**：`port` / `error_code` / `dependencies_version` / `version` / `service_ids` / `component_id` / `package_name` / `author` / `email` 全部必须来自 `.ai-dev/scaffold-defaults.yaml`，缺失就 REVISE 让 Orchestrator 补，不要猜。
+3. **禁止用 git config 取 author/email**：公司没有 git 环境，author/email 必须从 yaml 读，缺失就上报让 Orchestrator 用 AskUserQuestion 问用户。
+4. **禁止跳过 validate_params**：调 `generate_backend` 前必须先 `validate_params`。
+5. **禁止自动 overwrite**：`generate_backend` 返回 `TARGET_NOT_EMPTY` 时必须 issues 上报让用户决定，**不能**自己传 `overwrite=true`。
+6. **禁止假调用**：返回 `status: ok` 后必须用 Read/Glob 校验目标路径真有文件落地。
+
+详细 5 步流程见 `references/scaffold.md`。
 
 ## Issue 上报
 
