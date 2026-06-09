@@ -43,11 +43,14 @@ description: >
 
 抓取决策树摘要（完整规则见 reference）：
 1. 先用 WebFetch 轻量抓取。
-2. 失败（403/SSO/空内容）→ 用 `mcp__playwright__browser_navigate` 打开页面。
-3. 页面需要登录 → 读取 `~/.claude/config/internal-urls.yaml` 配置，用 Playwright MCP 自动登录。
-4. 都失败 → 输出 draft + open_questions 请求人工协助。
+2. 失败（403/SSO/空内容）→ 用 `mcp__playwright__browser_navigate` 打开页面。Playwright MCP 默认持久化 profile，cookie 跨 session 保留。
+3. 页面跳到登录页 → 检查 `~/.claude/config/internal-urls.yaml`：
+   - 凭证齐全 → 自动 SSO 填表登录。
+   - 凭证缺失（推荐） → 输出 draft + open_question，引导用户在 Playwright 浏览器中手动登录一次，REVISE 重抓。
+4. 都失败 → 输出 draft 请求人工粘贴正文。
 
 **禁止在 WebFetch 失败后直接放弃或要求用户粘贴内容。必须尝试 Playwright MCP 路径。**
+**推荐路径是"手动登录一次 + 持久化 profile 复用"，不是 SSO 自动填表。**
 
 如果输入是文档路径，用 Read 工具读取。
 如果输入是用户直接粘贴的文本，直接使用。
