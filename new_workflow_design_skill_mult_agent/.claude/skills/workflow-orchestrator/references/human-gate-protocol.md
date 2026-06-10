@@ -1,5 +1,14 @@
 # Human Gate 协议
 
+> **STOP — Agent 返回后，必须先看 `status` 字段，再决定走哪个 Case。**
+> - `status: "draft"` + `open_questions[]` / `open_decisions[]` 非空 → **必须先按 Case 2 逐项 AskUserQuestion 收集答案**，全部收集完才能进 Case 1 的 APPROVE/REVISE/REJECT
+> - `status: "final"` → 走 Case 1
+> - blocking issue → 走 Case 3
+> - optional 阶段 → 走 Case 4
+>
+> **禁止跳过 OQ/Decision 收集直接问 APPROVE/REVISE/REJECT。**
+> **禁止用纯文本一次性列出所有 OQ 让用户回答 — 必须用 `AskUserQuestion` 工具。**
+
 ## 概述
 
 Human Gate 是 Orchestrator 在每个阶段完成后与用户交互的机制。它确保：

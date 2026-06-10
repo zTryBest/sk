@@ -1,5 +1,15 @@
 # 编码阶段协作协议
 
+> **STOP — 进入编码阶段时，调度 BackendAgent 之前必须先做完 Phase 初始化的 Step 3。**
+>
+> 具体：
+> 1. 检测 `workspace/backend/` 是否为空
+> 2. 为空 → 必须调 `mcp__scaffold__get_form_schema()` → 按 schema.type 动态生成 AskUserQuestion 逐项收集 → 写入 `.ai-dev/scaffold-defaults.yaml`
+> 3. 写完 yaml 才能调度 BackendAgent，调度 prompt 必须嵌入 yaml 的 backend.* 全部字段
+>
+> **禁止 workspace/backend/ 为空时直接调度 BackendAgent**（BackendAgent 会因 yaml 缺失上报 issues 浪费一次调度）。
+> **禁止用 Bash curl 拉脚手架代替 mcp__scaffold__generate_backend。**
+
 ## 概述
 
 编码阶段（Stage 5: coding）与其他阶段不同，它涉及多个 Agent 协作完成实际代码实现。Orchestrator 在此阶段作为 Agent Team 的调度器。

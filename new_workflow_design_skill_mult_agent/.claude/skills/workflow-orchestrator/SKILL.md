@@ -127,20 +127,69 @@ LOOP:
 
 ## Human Gate
 
-按 `references/human-gate-protocol.md` 执行。核心流程：
-- 展示阶段摘要和产物概要。
-- **所有用户决策（APPROVE/REVISE/REJECT、OQ 澄清、blocking 处置、optional 选择）必须用 `AskUserQuestion` 工具收集**，禁止让用户输入关键字或一次性列出所有问题。映射规则、批次拆分、推荐选项标注等见 `references/human-gate-protocol.md`。
-- 记录决策到 decision-log。
+### Gate 入口决策树（强约束，违反视为流程错误）
+
+Agent 返回后**禁止直接进 APPROVE/REVISE/REJECT 问题**。必须按以下顺序判断走哪个 Case：
+
+```
+Agent 返回 artifact
+  │
+  ├─ 读取 artifact.status 字段（必须真读，不能假设）
+  │
+  ├─ status = "draft" AND open_questions[] 非空
+  │    → Case 2 OQ 澄清（用 AskUserQuestion 一项一项问，全部收集后才能进 APPROVE）
+  │
+  ├─ status = "draft" AND open_decisions[] 非空
+  │    → Case 2 决策澄清（同上）
+  │
+  ├─ status = "final"
+  │    → Case 1 APPROVE/REVISE/REJECT（也用 AskUserQuestion）
+  │
+  ├─ Agent 返回 blocking issue
+  │    → Case 3 阻塞处置（用 AskUserQuestion）
+  │
+  └─ Stage 是 optional 且 status = "pending"
+       → Case 4 YES/SKIP（用 AskUserQuestion）
+```
+
+**红线：**
+1. 看到 `status: "draft"` + `open_questions[]` 时**禁止跳过 OQ 直接问 APPROVE/REVISE/REJECT**。"draft" 字面意思就是产物未完成，必须先收集答案重新调度。
+2. 所有用户决策（OQ 答案 / APPROVE/REVISE/REJECT / blocking 处置 / optional 选择）**必须用 `AskUserQuestion` 工具**，禁止纯文本列出让用户回答。
+3. OQ 收集必须**逐项问完**，禁止只问第一项就跳走。
+4. OQ 数量 > 4 → 分批用 AskUserQuestion（每批 ≤ 4 个 question），前一批答完才发下一批。
+
+详细字段映射、推荐项标注、特殊处理见 `references/human-gate-protocol.md`。
+
+### 决策后动作
+
+- 记录决策到 decision-log（必填字段见 `human-gate-protocol.md` 第 4 节）。
 - **APPROVE 后必须按 `references/memory-protocol.md` 执行记忆沉淀**：自动生成项目经验和 Agent 通用经验候选，用 AskUserQuestion 让用户审核每一条，保留的条目追加到对应文件。REVISE/REJECT/SKIP 不沉淀。
+- REVISE → 把用户反馈 + OQ 答案带进下一次 Agent 调度 prompt。
+- REJECT → Case 5 拒绝处置（询问回退到哪个阶段）。
 
 ## 编码阶段
 
-编码阶段与其他阶段不同，按 `references/coding-phase-protocol.md` 执行：
-- 读取 `artifacts/04_plan.json` 获取 execution_order 和 tasks。
-- 按 phase 逐批调度 BackendAgent 和 FrontendAgent（并行）。
-- 全部编码完成后调度 TestAgent。
-- 收集所有 report 和 issues。
-- 进入 Human Gate 确认编码结果。
+按 `references/coding-phase-protocol.md` 执行。
+
+### 编码阶段强制清单（违反任一视为流程错误）
+
+进入编码阶段 (Stage 5) 时，**Orchestrator 必须按以下顺序执行**，禁止跳步：
+
+1. **读 `artifacts/04_plan.json`** 获取 `execution_order` 和 `tasks`。
+2. **检测 `workspace/backend/` 是否为空**：
+   - 为空（首次编码） → **必须执行 Step 3 收集脚手架 yaml**，禁止直接调度 BackendAgent
+   - 非空（增量编码） → 跳过 Step 3
+3. **调用 `mcp__scaffold__get_form_schema()`** 拉取 SpringBoot 完整表单 schema，按 schema.type 动态生成 AskUserQuestion 逐项收集用户配置，写入 `.ai-dev/scaffold-defaults.yaml`。**禁止用静态 4 组写死问题，必须按 schema 动态化。** 详见 `references/coding-phase-protocol.md` 3.1-3.4。
+4. **创建 `.ai-dev/task-board.json`**。
+5. **按 phase 逐批并行调度 BackendAgent + FrontendAgent**，调度 BackendAgent 的 prompt 中必须嵌入 yaml 的 `backend.*` 全部字段。
+6. **全部编码完成后调度 TestAgent**。
+7. **进入 Human Gate** 确认编码结果（按上述 Gate 入口决策树）。
+
+### 红线
+
+- 看到 `workspace/backend/` 为空就直接调 BackendAgent，**没经 Step 3 收集 yaml**，视为流程错误 — BackendAgent 会因 yaml 缺失上报 issues，导致重跑。
+- 用 Bash `curl` 拉脚手架代替 `mcp__scaffold__generate_backend`，视为流程错误 — 那是 BackendAgent 自身的红线，但 Orchestrator 不能放任。
+- 跳过 `get_form_schema` 直接用旧版静态配置写死，视为流程错误 — schema 可能已更新。
 
 ## Issue 处理
 
