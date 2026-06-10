@@ -60,20 +60,24 @@ AskUserQuestion(
 
 #### 1.3 后续动作
 
-- 用户选 **APPROVE** → `gate_decision = APPROVE`，**接着执行 1.4 记忆沉淀**，然后推进
+- 用户选 **APPROVE** → `gate_decision = APPROVE`
+
+> **STOP — APPROVE 后的下一步不是推进 pipeline，而是执行 1.4 记忆沉淀。**
+> 记忆沉淀是 APPROVE 的即时副作用，禁止推迟到"所有阶段都完成再总结"。**
+
 - 用户选 **REVISE** → 紧接着用 AskUserQuestion 或直接接收用户文本说明修改意见，写入 decision-log 的 `user_feedback`
 - 用户选 **REJECT** → 进入 Case 5 拒绝处理流程（询问回退到哪个阶段）
 - 用户选 **Other** → 解析自由文本，匹配 APPROVE/REVISE/REJECT 之一
 
-#### 1.4 记忆沉淀（仅 APPROVE 触发）
+#### 1.4 记忆沉淀（仅 APPROVE 触发，强制执行）
 
-按 `memory-protocol.md` 第 3 节执行：
+按 `memory-protocol.md` 第 3 节执行。**这是 APPROVE 的硬性副作用，不能跳过。**
 
 1. orchestrator 读本阶段 artifact + 本次 decision-log + 本阶段 warning issues
 2. 生成两类候选条目：
    - 项目经验候选（0-3 条）：本项目特定的事实/决策/踩坑
    - Agent 通用经验候选（0-2 条）：可复用到其他项目的方法论改进
-3. 候选总数 == 0 → 跳过本步，直接推进
+3. **如果候选总数 == 0**：至少生成 1 条"本阶段事实记录"作为项目经验候选（如"本阶段 product_id=XXX, version=YYY, 经确认无平台依赖"），确保每个阶段至少沉淀一条事实。**不允许空跳过。**
 4. 候选总数 > 0 → 用 AskUserQuestion 让用户对每条选择「保留 / 修改 / 丢弃」，最多 4 条/批
 5. 保留的条目按格式 `- [{YYYY-MM-DD} stage:{stage} DEC-{id}] {lesson}` 追加到对应文件
 6. 文件不存在时按 memory-protocol.md 第 6 节初始化

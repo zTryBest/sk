@@ -197,11 +197,11 @@ FOR each phase in execution_order:
 按照 `.claude/skills/backend-coding/SKILL.md` 的方法论完成后端编码。
 
 ## 输入
-- 方案设计：artifacts/02_solution.json
-- 任务计划：artifacts/04_plan.json
+- 方案设计：{project_root}/artifacts/02_solution.json
+- 任务计划：{project_root}/artifacts/04_plan.json
 - 你负责的任务：{task_ids}
 - 接口契约：{related_contracts}
-- 项目根目录：{project_root}
+- 项目根目录（绝对路径）：{project_root}  — **所有文件路径必须以 project_root 为基准，不要用相对 CWD**
 {IF 首次编码（workspace/backend/ 为空）:}
 
 ## 脚手架默认配置（由 Orchestrator 注入，直接使用，不要再问）
@@ -221,12 +221,13 @@ backend:
   config: {yaml.backend.config}    # dict, 含 database/cache/mq/reference/javaVersion/basicFeatures/controller
 
 按 references/scaffold.md 的 3 步流程，用 mcp__scaffold__generate_backend 拉取脚手架。
+调用时必须传绝对路径 output_path = "{project_root}/workspace/backend"（project_root 是上面输入段的绝对路径）。
 **禁止 Bash curl，禁止凭空猜参数（含 author/email），禁止用 git config，禁止假调用，禁止 BackendAgent 自己调 get_form_schema。**
 {ENDIF}
 
 ## 输出
-- 代码输出到：workspace/backend/
-- 完成报告：artifacts/05_backend_report.md
+- 代码输出到：{project_root}/workspace/backend/
+- 完成报告：{project_root}/artifacts/05_backend_report.md
 - 汇报：完成的任务、实现的接口、发现的 issues
 
 ## 约束

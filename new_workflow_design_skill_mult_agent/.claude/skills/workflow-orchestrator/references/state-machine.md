@@ -71,14 +71,44 @@ rejected ────────────────────→ pending
 rejected ────────────────────→ 回退到更早阶段      (用户指定回退点)
 ```
 
-## 推进规则
+## 推进规则（强约束）
 
 当 `current_stage` 的 status 变为 `approved` 或 `skipped` 时：
-1. 找 order + 1 的 stage。
-2. 如果下一个 stage 是 `optional`，先问用户是否执行。
-3. 用户选择跳过 → status 设为 `skipped`，继续推进。
-4. 用户选择执行或 stage 非 optional → 更新 `current_stage`，status 设为 `pending`。
-5. 所有 stage 都是 `approved` 或 `skipped` → pipeline 完成。
+
+```
+1. 从 state.json.stages[] 找到当前 stage.order
+2. 找 order = current_order + 1 的 stage
+   - 不存在 → pipeline 完成
+3. 检查该 stage.optional：
+   - optional == true  → Case 4 AskUserQuestion（YES/SKIP）
+   - optional == false → 更新 current_stage 为该 stage.id，status = "pending"
+4. 继续主循环
+```
+
+**推进必须是 `order + 1`，不能跳 order。** 从 state.json.stages[] 读 order 字段，不能凭 orchestrator Pipeline 阶段定义的文字顺序推断。
+
+### 常见错误（违反即流程错误）
+
+| ❌ 错误行为 | ✓ 正确行为 |
+|---|---|
+| prototype-design (order 3) approved → current_stage 直接切 coding (order 5) | prototype-design (order 3) approved → 找 order 4 → task-planning pending |
+| requirement-analysis approved → 跳过 solution-design 直接进 prototype-design | order 1 approved → order 2 (non-optional) → 必须 pending |
+| optional 阶段用户选 YES → approved 后跳过下一个非 optional 阶段 | optional YES → 执行 → approved → order+1 → 正常推进 |
+
+### 同步检查表（每次推进时执行）
+
+```
+推进前：
+  current_order = ___
+  next_order = current_order + 1 = ___
+  next_stage_id = ___
+  next_stage.optional = true/false
+
+确认后在新 prompt 或状态日志中输出：
+  "Stage X (order N) approved → 推进到 Stage Y (order N+1)"
+```
+
+如果输出里没有这行，视为推进未执行。
 
 ## 回退规则
 
@@ -97,13 +127,16 @@ rejected ────────────────────→ 回退�
 
 ## 初始化模板
 
-当 `.ai-dev/state.json` 不存在时，创建：
+当 `<project_root>/.ai-dev/state.json` 不存在时，创建：
+
+**`project_root` = 当前 Claude Code 的工作目录（会话 CWD）。** 所有 `.ai-dev/`、`artifacts/`、`workspace/` 路径都基于此拼接。
 
 ```json
 {
   "schema_version": "1.0",
   "project_name": "",
   "project_description": "",
+  "project_root": "<当前 CWD 绝对路径，如 E:/AI/demo>",
   "created_at": "<ISO8601>",
   "updated_at": "<ISO8601>",
   "current_stage": "requirement-analysis",

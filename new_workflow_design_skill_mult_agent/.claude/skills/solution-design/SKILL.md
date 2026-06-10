@@ -61,16 +61,39 @@ artifacts/01_requirement.json
 
 输出：应用形态、前端形态、后端服务形态、数据库类型、中间件、部署环境、安全/日志/监控。
 
-### Step 3: 实现方式分类
+### Step 3: 实现方式分类 + 平台依赖分析（强制步骤）
 
-**按 `references/phase-details.md` Phase 3 执行。**
+**第一动作：读 `references/mcp-baseline-rules.md` Phase 2.5。读完之前不能做分类。**
 
-每个功能项分类为：
+对每个功能项：
+1. 按 Phase 2.5 模板拆出「执行动作」和「平台上下文动作」。
+2. 平台上下文动作不为空 → 分类为 `BASELINE_API_REUSE` 或 `HYBRID`，生成 MCP 检索任务（Phase 2.5 表格）。
+3. 平台上下文动作为空 → 分类为 `CUSTOM_CODE` / `EXTERNAL_INTEGRATION` / `NO_API_NEEDED`。
+4. 不确定 → `UNDECIDED`，写入 `open_decisions`。
+
+每个功能项或子能力必须带以下分类之一：
 - `BASELINE_API_REUSE` | `CUSTOM_CODE` | `EXTERNAL_INTEGRATION` | `HYBRID` | `NO_API_NEEDED` | `UNDECIDED`
+
+**停止并检查**（分类完成后、下一动作前）：
+```
+读 implementation_classification 表格，统计：
+  BASELINE_API_REUSE: N 项
+  HYBRID:             M 项
+
+IF N + M == 0:
+  在 issues 中记录 reason: "本需求所有功能项均无平台依赖，平台上下文动作为空"
+  → 跳过 Step 4，直接进 Step 5
+IF N + M > 0:
+  → 必须进 Step 4，对每项调 MCP
+```
+
+**禁止在没有平台上下文分析表格的情况下凭感觉标 CUSTOM_CODE。**
 
 ### Step 4: knowledge-base MCP 查询
 
-**严格按 `references/mcp-baseline-rules.md` 执行。**
+**调用此步骤的前置条件：Step 3 的 N + M > 0。否则跳过。**
+
+**第一动作：读 `references/mcp-baseline-rules.md` Phase 3-4。读完之前不能调 MCP。**
 
 **调用方式：直接使用 `mcp__knowledge-base__*` 原生工具，与 Read/Write/Grep 同级。严禁通过 Bash、Python 脚本或 curl 命令间接调用 MCP。**
 
@@ -106,8 +129,8 @@ mcp__knowledge-base__submit_component_version_doc_mapping(...)
 
 只有满足以下条件才能标为 `final`：
 - 已读取并使用 `artifacts/01_requirement.json`。
-- 每个功能项都有实现方式分类。
-- 需要复用 baseline API 的能力都有 MCP 证据。
+- 每个功能项都有平台依赖分析和实现方式分类（分析结论是"无平台依赖"也是有效的）。
+- 分析出平台依赖的能力都有 MCP 证据（无平台依赖项不需要）。
 - 选中的 baseline API 具备详情契约和版本兼容证据。
 - 定制代码、外部集成、数据库、接口、异常和测试设计完整。
 - 无关键 `open_decisions`。

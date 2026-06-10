@@ -1,5 +1,15 @@
 # MCP Baseline Rules
 
+> **STOP — 读到本文件说明已完成 Step 3 平台依赖分析，确认有 BASELINE_API_REUSE / HYBRID 项需要 MCP 检索。**
+>
+> 下面 Phase 2.5 的「平台上下文动作 → MCP 检索任务」是强制步骤，不是参考。
+> 有平台依赖但不分析 → 禁止标 CUSTOM_CODE。
+> 分析出 MCP 检索任务但不调 MCP → 任务失败。
+>
+> **MCP 调用必须真正发生**：`health_check` → `list_products` → `list_product_components` → `find_apis_for_requirement` → `get_api_detail`。
+> 每次调用的工具名、参数、候选数、采纳/淘汰原因必须写入 `02_solution.json.mcp_evidence[]`。
+> `NO_CANDIDATE` 或 `NEED_KB_IMPORT` 是正常结果，不调才是异常。
+
 ## MCP 服务：knowledge-base
 
 `mcp__knowledge-base__*` 是已注册的原生工具，直接调用即可。不要通过 Bash 安装或启动任何东西。

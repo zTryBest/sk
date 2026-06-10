@@ -46,14 +46,21 @@ description: >
 
 ### 1. 初始化
 
-检查 `.ai-dev/state.json` 是否存在：
-- 不存在 → 创建 `.ai-dev/` 目录和初始 state.json（schema 见 `references/state-machine.md`）。同时创建空的 decision-log.json 和 issue-log.json。
-- 存在 → 读取 `current_stage` 和对应 stage 的 `status`，从断点恢复。
+**首次初始化时必须记录 `project_root`**（当前 Claude Code 工作目录的绝对路径）。所有 `.ai-dev/` / `artifacts/` / `workspace/` 操作均基于此路径，存储为 state.json 的 `project_root` 字段。
+
+检查 `<project_root>/.ai-dev/state.json` 是否存在：
+- 不存在 → 创建 `<project_root>/.ai-dev/` 目录和初始 state.json（schema 见 `references/state-machine.md`，含 `project_root` 字段）。同时创建空的 decision-log.json 和 issue-log.json。
+- 存在 → 读取 `project_root` + `current_stage` 和对应 stage 的 `status`，从断点恢复。**即使恢复后调度 agent，也要把 `project_root` 注入 prompt。**
 
 初始化时需要的信息（从用户消息中提取或询问）：
 - 项目名称
 - 项目描述（可选）
 - 用户提供的需求输入（URL / 文档路径 / 文本描述）
+
+**路径纪律（全局生效）：**
+- orchestrator 读/写 `.ai-dev/` 时用 `<project_root>/.ai-dev/...`
+- orchestrator 调度 agent 时在 prompt 中的路径全部拼绝对路径：`<project_root>/artifacts/...`、`<project_root>/workspace/...`
+- 不要依赖 agent 或 subagent 的 CWD
 
 ### 2. 立即调度第一个 Agent
 
@@ -99,20 +106,34 @@ Stage 3 (prototype-design) 是 optional 阶段，需用户确认是否执行。
 
 ```
 LOOP:
-  1. 读取 .ai-dev/state.json
+  1. 读取 <project_root>/.ai-dev/state.json
   2. 找到 current_stage
   3. 根据 status 执行对应动作（调度 Agent / 展示 Gate / 推进）
-  4. IF stage completed (approved/skipped):
-       advance current_stage to next
+  4. IF gate_decision = APPROVE:
+       → 立即执行记忆沉淀（memory-protocol.md 第 3 节）— 生成候选 → AskUserQuestion → 写入
+       → 然后从 state.json.stages[] 读当前 order，找 order+1 的 stage
+       → 更新 current_stage = 该 stage.id, status = "pending"
+       → 输出一句 "Stage {N} (order {n}) approved → 推进到 Stage {M} (order {n+1})"
        CONTINUE LOOP
-  5. IF stage needs human input:
-       展示 Human Gate → 等待用户响应
-       根据响应更新状态
+  5. IF gate_decision = REVISE:
+       → 带上 feedback + OQ/decision 答案重新调度 Agent，attempts+1
+       → 状态切回 in_progress
        CONTINUE LOOP
-  6. IF pipeline 所有 stage approved:
+  6. IF gate_decision = REJECT:
+       → 按 state-machine.md 回退规则处理
+       → 等待用户指示
+       CONTINUE LOOP
+  7. IF gate_decision = SKIP:
+       → 当前 stage status = "skipped"
+       → 按 order+1 推进
+       CONTINUE LOOP
+  8. IF pipeline 所有 stage approved 或 skipped:
        输出完成摘要
        EXIT
 ```
+
+**推进是 `order + 1`，从 state.json.stages[] 读 order 字段，不能凭感觉跳。**
+**记忆沉淀是 APPROVE 后的步骤 4 第一项，不能推到之后。**
 
 ## Agent 调度
 

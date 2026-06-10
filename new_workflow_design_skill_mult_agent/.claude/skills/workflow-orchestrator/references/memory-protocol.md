@@ -68,8 +68,13 @@ REVISE / REJECT / SKIP 不触发（产物没被认可，不沉淀错误经验）
 2. orchestrator 自动生成两类候选条目：
    - **项目经验候选**：本项目特定的事实（产品 ID、版本、决策、踩坑） — 0-3 条
    - **Agent 通用经验候选**：可复用到其他项目的方法论改进 — 0-2 条
-3. orchestrator 用 `AskUserQuestion` 让用户审核每一条：保留 / 修改 / 丢弃
-4. 保留的条目追加到对应文件末尾
+3. **兜底规则（禁止空跳过）**：如果两类候选总计 == 0，必须生成至少 1 条"本阶段事实记录"作为项目经验候选。格式示例：
+   ```
+   - [{date} stage:{stage} DEC-{id}] 本阶段确认 product_id={xxx} version={yyy}，{关键决策或结论一句话}
+   ```
+   确保**每个 APPROVE 至少有一条记忆沉淀**。不存在"本阶段没什么可记的"。
+4. orchestrator 用 `AskUserQuestion` 让用户审核每一条：保留 / 修改 / 丢弃
+5. 保留的条目追加到对应文件末尾
 
 ### 3.3 AskUserQuestion 调用模板
 

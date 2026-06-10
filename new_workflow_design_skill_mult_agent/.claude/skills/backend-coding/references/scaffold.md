@@ -84,7 +84,7 @@ mcp__scaffold__generate_backend(
   email               = yaml.backend.email,
   author              = yaml.backend.author,
   config              = yaml.backend.config,    # 整个 dict 传过去, MCP server 内部翻译 LabelDTO
-  output_path         = "workspace/backend",
+  output_path         = "{project_root}/workspace/backend",   # 绝对路径，从调度 prompt 的 project_root 拼接
   overwrite           = false
 )
 ```
