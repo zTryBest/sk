@@ -62,11 +62,11 @@ artifacts/02_solution.json
 
 如果是第一次编码（`workspace/backend/` 不存在或为空）：
 
-**强制：必须读 `references/scaffold.md` 并严格按其中的 5 步流程执行。** 核心规则：
+**强制：必须读 `references/scaffold.md` 并严格按其中的 3 步流程执行。** 核心规则：
 - 通过 `mcp__scaffold__generate_backend` 工具拉取，**禁止** Bash curl / wget 直接下载
-- `port` / `error_code` / `package_name` 等业务字段从 `.ai-dev/scaffold-defaults.yaml` 读取，**禁止** LLM 凭空生成
-- `author` / `email` 从 `git config` 取
-- 中间件清单优先调 `mcp__scaffold__list_middleware_options` 实时拉取
+- 所有 `backend.*` 字段从 `.ai-dev/scaffold-defaults.yaml` 读取，**禁止** LLM 凭空生成
+- `author` / `email` 从 yaml 读取，**禁止** 用 `git config`（公司没有 git 环境）
+- yaml 已由 Orchestrator 在编码阶段开头调 `mcp__scaffold__get_form_schema` 后用 AskUserQuestion 收集完毕
 
 如果非首次调度（已有代码）：
 - 读取现有代码结构。

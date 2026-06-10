@@ -52,18 +52,67 @@
 
 1. Orchestrator 读取 `artifacts/04_plan.json`。
 2. 提取 `execution_order` 和 `tasks`。
-3. **检查脚手架默认配置**（仅当 `workspace/backend/` 不存在或为空，即首次编码时）：
-   - 读取 `.ai-dev/scaffold-defaults.yaml`
-   - 必填字段（统一在编码阶段最开始一次性收集）：
-     - 业务字段：`backend.component_id` / `backend.package_name` / `backend.port` / `backend.error_code` / `backend.dependencies_version` / `backend.version` / `backend.service_ids` / `backend.middlewares`
-     - 用户身份：`backend.author` / `backend.email`（公司没有 git 环境，禁止从 git config 取）
-   - 任一缺失 → 用 AskUserQuestion 逐项收集（每批 ≤ 4 项），按以下顺序问：
-     1. 用户身份组：author（用户名）/ email（邮箱）— 自由文本，无选项
-     2. 业务命名组：component_id / package_name — 推荐选项基于需求 product_id 推断
-     3. 中间件组：先调 `mcp__scaffold__list_middleware_options` 拿候选 → 用户选 middlewares 和 service_ids
-     4. 其他业务字段：port / error_code / version / dependencies_version — 给出公司常用默认值作为推荐
-   - 用户答完后写回 yaml，**之后调度 BackendAgent 时不再重复问**
-   - yaml 不存在 → 按 schema 创建
+3. **检查并填充脚手架配置**（仅当 `workspace/backend/` 不存在或为空，即首次编码时）：
+
+   **3.1 拉取表单 schema**
+
+   调 `mcp__scaffold__get_form_schema()` 拉取 SpringBoot 的完整表单定义。返回结构：
+   ```
+   data.baseInfos[]  — 9 项基础字段，每项含 {label, value, defaultValue, type, order}
+   data.configInfo[] — 7 类配置，每项含 {label, value, type, options[], order}
+                      type 取值: radio (单选) / checkbox (多选) / cascader-multi (二级级联多选)
+   ```
+
+   失败（`SCHEMA_FETCH_FAILED`）→ blocking issue，提示用户检查 MCP server 和 SpringBoot 连通性。
+
+   **3.2 读取已存在的 yaml**
+
+   读 `.ai-dev/scaffold-defaults.yaml` 的 `backend.*` 字段。不存在则视作全部缺失。
+
+   **3.3 对每个未在 yaml 中或值为空的字段，用 AskUserQuestion 收集**
+
+   字段名与 schema 的 `value` 一致（camelCase）。按 schema 的 `order` 排序，每批 ≤ 4 项。
+
+   每个字段的 AskUserQuestion 渲染规则（按 schema.type）：
+
+   | schema.type | AskUserQuestion 渲染 |
+   |---|---|
+   | `input` / `number` / `custominput` | label = schema.label，options 给 2-3 项：`defaultValue (推荐)` + `自定义输入` |
+   | `radio` | label = schema.label，options 用 schema.options[].label/value 平铺 |
+   | `checkbox` | 拆成多个 `是否启用 {option.label}?` 问题（每项单选 是/否），最终在 yaml 里组装成 list |
+   | `cascader-multi` | 先问父级（radio），再问每个父级下的子项（checkbox），yaml 存 `[[parent,child],[parent,child2]]` |
+
+   推荐项策略：
+   - baseInfos 字段：`defaultValue` 作为推荐
+   - configInfo 字段：根据 02_solution.json 的技术栈推断（如方案选了 Redis → cache 推荐 redisson）；无推断依据用 `defaultValue` 或第一个 option
+
+   **3.4 写回 yaml**
+
+   把答案按以下结构写入 `.ai-dev/scaffold-defaults.yaml`（camelCase，匹配 schema）：
+   ```yaml
+   backend:
+     # baseInfos
+     version: "..."
+     packageName: "..."
+     componentId: "..."
+     serviceId: ["..."]
+     port: "..."
+     errorCode: "..."
+     dependenciesVersion: "..."
+     email: "..."
+     author: "..."
+     # configInfo (key 用 schema.value)
+     config:
+       database: "mysql"                    # radio → string
+       cache: "redisson"                    # radio → string
+       mq: ["kafka"]                        # checkbox → list[str]
+       reference: [["consul","bic"]]        # cascader-multi → list[[parent,child]]
+       javaVersion: "11"                    # radio → string
+       basicFeatures: ["cloudstore"]        # checkbox → list[str]
+       controller: []                       # 用户未选 → 空 list
+   ```
+
+   写回后 **调度 BackendAgent 时不再重复问**。
 4. 创建 `.ai-dev/task-board.json`：
 
 ```json
@@ -147,22 +196,22 @@ FOR each phase in execution_order:
 
 ## 脚手架默认配置（由 Orchestrator 注入，直接使用，不要再问）
 
-从 .ai-dev/scaffold-defaults.yaml 读取：
+`.ai-dev/scaffold-defaults.yaml` 已就绪，关键字段（camelCase 与 SpringBoot DTO 一致）：
 
 backend:
-  component_id: "{yaml.backend.component_id}"
-  package_name: "{yaml.backend.package_name}"
-  service_ids: {yaml.backend.service_ids}
-  port: "{yaml.backend.port}"
-  error_code: "{yaml.backend.error_code}"
   version: "{yaml.backend.version}"
-  dependencies_version: "{yaml.backend.dependencies_version}"
-  middlewares: {yaml.backend.middlewares}
-  author: "{yaml.backend.author}"
+  packageName: "{yaml.backend.packageName}"
+  componentId: "{yaml.backend.componentId}"
+  serviceId: {yaml.backend.serviceId}
+  port: "{yaml.backend.port}"
+  errorCode: "{yaml.backend.errorCode}"
+  dependenciesVersion: "{yaml.backend.dependenciesVersion}"
   email: "{yaml.backend.email}"
+  author: "{yaml.backend.author}"
+  config: {yaml.backend.config}    # dict, 含 database/cache/mq/reference/javaVersion/basicFeatures/controller
 
-按 references/scaffold.md 流程，用 mcp__scaffold__generate_backend 拉取脚手架。
-**禁止 Bash curl，禁止凭空猜参数（含 author/email），禁止用 git config，禁止假调用。**
+按 references/scaffold.md 的 3 步流程，用 mcp__scaffold__generate_backend 拉取脚手架。
+**禁止 Bash curl，禁止凭空猜参数（含 author/email），禁止用 git config，禁止假调用，禁止 BackendAgent 自己调 get_form_schema。**
 {ENDIF}
 
 ## 输出

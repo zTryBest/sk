@@ -59,13 +59,14 @@ reference 文件按需读取：
 `workspace/backend/` 为空时必须先获取脚手架。以下行为**严格禁止**，违反视为任务失败：
 
 1. **禁止 Bash 拉取脚手架**：不允许 `curl` / `wget` / `Invoke-WebRequest` / `python urllib` 直接调 SpringBoot 脚手架接口。必须用 `mcp__scaffold__generate_backend`。
-2. **禁止凭空猜任何字段**：`port` / `error_code` / `dependencies_version` / `version` / `service_ids` / `component_id` / `package_name` / `author` / `email` 全部必须来自 `.ai-dev/scaffold-defaults.yaml`，缺失就 REVISE 让 Orchestrator 补，不要猜。
+2. **禁止凭空猜任何字段**：所有 `backend.*` 字段（version / packageName / componentId / serviceId / port / errorCode / dependenciesVersion / email / author / config 中的 7 类）必须来自 `.ai-dev/scaffold-defaults.yaml`，缺失就 REVISE 让 Orchestrator 补，不要猜。
 3. **禁止用 git config 取 author/email**：公司没有 git 环境，author/email 必须从 yaml 读，缺失就上报让 Orchestrator 用 AskUserQuestion 问用户。
 4. **禁止跳过 validate_params**：调 `generate_backend` 前必须先 `validate_params`。
 5. **禁止自动 overwrite**：`generate_backend` 返回 `TARGET_NOT_EMPTY` 时必须 issues 上报让用户决定，**不能**自己传 `overwrite=true`。
 6. **禁止假调用**：返回 `status: ok` 后必须用 Read/Glob 校验目标路径真有文件落地。
+7. **禁止自己调 get_form_schema**：那是 Orchestrator 在调度前的工作，agent 启动时 yaml 应已就绪。如果 yaml 缺字段，REVISE 上报，不要去拉 schema 自己补。
 
-详细 5 步流程见 `references/scaffold.md`。
+详细 3 步流程见 `references/scaffold.md`。
 
 ## Issue 上报
 

@@ -59,7 +59,7 @@
       "mcp__knowledge-base__get_api_detail",
       "mcp__knowledge-base__submit_component_version_doc_mapping",
 
-      "mcp__scaffold__list_middleware_options",
+      "mcp__scaffold__get_form_schema",
       "mcp__scaffold__validate_params",
       "mcp__scaffold__generate_backend",
 
